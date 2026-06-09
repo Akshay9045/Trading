@@ -1,0 +1,172 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  :root {
+    --bull: #00d4a1;
+    --bear: #ff4d6d;
+    --hold: #f59e0b;
+    --dark-bg: #0c0f1a;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-dark-400 text-white;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+
+  /* Scrollbar styling */
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.2);
+  }
+}
+
+@layer components {
+  /* Glass morphism card */
+  .glass-card {
+    @apply rounded-2xl border border-white/[0.08] backdrop-blur-sm;
+    background: linear-gradient(135deg, rgba(255,255,255,0.07) 0%, rgba(255,255,255,0.02) 100%);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  }
+
+  /* Ticker */
+  .ticker-container {
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .ticker-content {
+    display: inline-block;
+    animation: ticker 30s linear infinite;
+  }
+
+  /* Glow effects */
+  .glow-bull {
+    box-shadow: 0 0 20px rgba(0, 212, 161, 0.3);
+  }
+
+  .glow-bear {
+    box-shadow: 0 0 20px rgba(255, 77, 109, 0.3);
+  }
+
+  .glow-primary {
+    box-shadow: 0 0 30px rgba(14, 165, 233, 0.25);
+  }
+}
+
+@layer utilities {
+  /* Shimmer animation for loading */
+  .animate-shimmer {
+    background: linear-gradient(90deg,
+      rgba(255,255,255,0.04) 0%,
+      rgba(255,255,255,0.08) 50%,
+      rgba(255,255,255,0.04) 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 2s linear infinite;
+  }
+
+  .font-trading {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  }
+
+  /* Number flash on price change */
+  .price-flash-up {
+    animation: flashUp 0.3s ease-out;
+  }
+
+  .price-flash-down {
+    animation: flashDown 0.3s ease-out;
+  }
+}
+
+/* Keyframes */
+@keyframes ticker {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes flashUp {
+  0% { color: #00d4a1; background: rgba(0, 212, 161, 0.15); }
+  100% { color: inherit; background: transparent; }
+}
+
+@keyframes flashDown {
+  0% { color: #ff4d6d; background: rgba(255, 77, 109, 0.15); }
+  100% { color: inherit; background: transparent; }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
+@keyframes scan {
+  0% { top: -2px; }
+  100% { top: 100%; }
+}
+
+@keyframes glowPulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+/* TradingView chart overrides */
+.tv-lightweight-charts {
+  font-family: 'JetBrains Mono', monospace !important;
+}
+
+/* Custom range input */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: rgba(255,255,255,0.1);
+  border-radius: 4px;
+  height: 4px;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  background: #0ea5e9;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+/* Selection color */
+::selection {
+  background: rgba(14, 165, 233, 0.3);
+  color: white;
+}

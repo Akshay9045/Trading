@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment / secrets — NEVER commit real keys
+.env
+.env.local
+.env.*.local
+
+# OS / editor
+.DS_Store
+*.log
+npm-debug.log*
+.vscode/
+.idea/
