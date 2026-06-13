@@ -175,13 +175,13 @@ export const getAIPrediction = (signal, quote) => {
   const normalizedBull = Math.floor((bullishPct / total) * 100)
   const normalizedBear = 100 - normalizedBull
 
-  // Fear & Greed (based on RSI + momentum)
-  const rsi = signal.indicators.rsi || 50
-  const fearGreed = Math.floor(rsi * 0.7 + (signal.bullScore - signal.bearScore) * 30 + 50)
-    .toString()
-    .replace(/^(\d+).*/, '$1')
-
-  const fgValue = Math.min(100, Math.max(0, parseInt(fearGreed)))
+  // Fear & Greed — a HEURISTIC proxy derived from RSI (a real momentum oscillator):
+  // low RSI = fear, high RSI = greed, which lines up with the labels below. Nudged
+  // slightly by the net directional bias. This is NOT a real market-wide F&G index.
+  // (The old formula multiplied a 0–100 score by 30, which pinned the value to 100.)
+  const rsi = signal.indicators.rsi ?? 50
+  const bias = (signal.bullScore - signal.bearScore) / 10   // bull/bearScore are 0–100 → small tilt
+  const fgValue = Math.min(100, Math.max(0, Math.round(rsi + bias)))
 
   return {
     bullishProbability: normalizedBull,
@@ -191,6 +191,6 @@ export const getAIPrediction = (signal, quote) => {
     marketSentiment: signal.type === 'BUY' ? 'Bullish' : signal.type === 'SELL' ? 'Bearish' : 'Neutral',
     trendStrength: signal.confidence > 75 ? 'Strong' : signal.confidence > 55 ? 'Moderate' : 'Weak',
     shortTermOutlook: normalizedBull > 60 ? 'Positive' : normalizedBear > 60 ? 'Negative' : 'Sideways',
-    volumeAnalysis: Math.random() > 0.5 ? 'Above Average' : 'Below Average',
+    volumeAnalysis: 'Unavailable',   // indices report no per-candle volume — don't fabricate it with Math.random()
   }
 }

@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { getNextExpiryISO } from './optionsEngine'
 
 // ── Symbol maps ────────────────────────────────────────────────────────────
 
@@ -44,7 +45,11 @@ const cached = (key, ttlMs, fn) => {
     .catch(err => {
       if (hit) {
         console.warn(`[apiService] Using stale cache for ${key}:`, err.message)
-        return hit.data
+        // Flag it so consumers can tell a stale price from a live one and avoid
+        // acting on it as if it were current.
+        return (hit.data && typeof hit.data === 'object')
+          ? { ...hit.data, _stale: true, _staleAgeMs: now - hit.ts }
+          : hit.data
       }
       throw err
     })
@@ -177,6 +182,72 @@ export const fetchCandles = (symbol, timeframe = '1D', outputSize = 200) =>
       }
     }
     return fetchYFCandles(symbol, timeframe, outputSize)
+  })
+
+// ── Groww — option chain (real per-strike premiums + IV) ───────────────────
+// Groww's payload field names have varied across API versions, so we read
+// defensively: try several known spellings and skip rows we can't parse.
+const pickNum = (obj, ...keys) => {
+  if (!obj) return null
+  for (const k of keys) {
+    const v = obj[k]
+    if (v != null && !Number.isNaN(Number(v))) return Number(v)
+  }
+  return null
+}
+
+// Normalize a raw Groww option-chain payload into:
+//   { strikes: Map<strike, {callLtp, callIV, putLtp, putIV}>, atmIV: number|null, expiry }
+const normalizeOptionChain = (raw, spot) => {
+  // The array of per-strike rows lives under one of these keys
+  const rows =
+    raw?.option_chains || raw?.option_chain || raw?.optionChains ||
+    raw?.chains || raw?.data || (Array.isArray(raw) ? raw : [])
+
+  const strikes = new Map()
+  for (const row of rows) {
+    const strike = pickNum(row, 'strike_price', 'strikePrice', 'strike')
+    if (strike == null) continue
+    const call = row.call_option || row.call_options || row.callOption || row.ce || row.CE
+    const put  = row.put_option  || row.put_options  || row.putOption  || row.pe || row.PE
+    // delta may be flat or nested under a `greeks` object
+    const pickDelta = (leg) => pickNum(leg, 'delta') ?? pickNum(leg?.greeks, 'delta')
+    strikes.set(strike, {
+      callLtp:   pickNum(call, 'ltp', 'last_price', 'lastPrice', 'close_price', 'close'),
+      callIV:    pickNum(call, 'implied_volatility', 'impliedVolatility', 'iv'),
+      callDelta: pickDelta(call),
+      putLtp:    pickNum(put,  'ltp', 'last_price', 'lastPrice', 'close_price', 'close'),
+      putIV:     pickNum(put,  'implied_volatility', 'impliedVolatility', 'iv'),
+      putDelta:  pickDelta(put),
+    })
+  }
+
+  // ATM IV = IV of the strike nearest spot (average of call/put legs)
+  let atmIV = null
+  if (spot && strikes.size) {
+    let best = null, bestDist = Infinity
+    for (const [strike, leg] of strikes) {
+      const d = Math.abs(strike - spot)
+      if (d < bestDist) { bestDist = d; best = leg }
+    }
+    if (best) {
+      const ivs = [best.callIV, best.putIV].filter(v => v != null)
+      atmIV = ivs.length ? ivs.reduce((a, b) => a + b, 0) / ivs.length : null
+    }
+  }
+
+  return { strikes, atmIV, count: strikes.size }
+}
+
+export const fetchOptionChain = (symbol, spot, expiryISO = getNextExpiryISO()) =>
+  cached(`chain:${symbol}:${expiryISO}`, 30_000, async () => {
+    const { data } = await axios.get('/api/groww/option-chain', {
+      params: { symbol, expiry: expiryISO }, timeout: 12000,
+    })
+    if (data.error) throw new Error(data.error)
+    const chain = normalizeOptionChain(data, spot)
+    if (!chain.count) throw new Error('Option chain returned no parseable strikes')
+    return { ...chain, expiry: expiryISO }
   })
 
 export const fetchMultipleQuotes = (symbols) =>

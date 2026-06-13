@@ -191,13 +191,16 @@ export const calculateStochRSI = (closes, rsiPeriod = 14, stochPeriod = 14) => {
 
 // Resample candles to a higher timeframe by grouping every `factor` bars into one.
 // e.g. 15m candles with factor 4 ≈ 1h candles.
+// IMPORTANT: groups are anchored to the RIGHT edge (most recent bar always closes
+// a group). Anchoring to index 0 would re-bucket every bar as the array grows by
+// one each backtest step, making the HTF trend "repaint" and become non-causal.
+// The leftmost partial group is dropped so every HTF candle has `factor` real bars.
 export const resampleCandles = (candles, factor) => {
   if (factor <= 1) return candles
   const out = []
-  for (let i = 0; i < candles.length; i += factor) {
-    const group = candles.slice(i, i + factor)
-    if (!group.length) break
-    out.push({
+  for (let end = candles.length; end - factor >= 0; end -= factor) {
+    const group = candles.slice(end - factor, end)
+    out.unshift({
       time:   group[0].time,
       open:   group[0].open,
       high:   Math.max(...group.map(c => c.high)),

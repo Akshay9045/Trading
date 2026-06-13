@@ -109,7 +109,7 @@ const ThinkingBar = ({ symbol }) => (
   >
     <Loader size={15} className="text-primary-400 animate-spin" />
     <span className="text-sm text-primary-400 font-medium">
-      Claude is analyzing {symbol} indicators…
+      AI is analyzing {symbol} indicators…
     </span>
     <div className="ml-auto flex gap-1">
       {[0, 0.2, 0.4].map(d => (
@@ -138,6 +138,7 @@ const ErrorCard = ({ error }) => (
 const ClaudeResultCard = ({ result, symbol, livePrice, signal, gate = 65, delay = 0 }) => {
   if (!result || result.error) return null
 
+  const aiName        = PROVIDER_INFO[result.provider]?.name || 'AI'
   const isCall        = result.optionType === 'CALL'
   const isPut         = result.optionType === 'PUT'
   const color         = isCall ? 'bull' : isPut ? 'bear' : 'hold'
@@ -186,7 +187,7 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, gate = 65, delay 
                 <span className="text-xs text-gray-500 font-mono">{symbol}</span>
                 <div className="flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-primary-500/10 border border-primary-500/20">
                   <Brain size={9} className="text-primary-400" />
-                  <span className="text-[9px] text-primary-400 font-mono font-bold">Claude AI</span>
+                  <span className="text-[9px] text-primary-400 font-mono font-bold">{aiName}</span>
                 </div>
               </div>
             </div>
@@ -266,6 +267,19 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, gate = 65, delay 
             <div className="text-[11px] text-gray-400 font-mono mt-1">
               Expiry: <span className="text-white font-bold">{weeklyExpiry}</span>
             </div>
+            {/* Real backtested numbers for this setup */}
+            {signal?.calibrated && (
+              <div className="text-[11px] font-mono mt-1">
+                <span className={signal.backtestWinRate >= 50 ? 'text-bull' : 'text-bear'}>
+                  {signal.backtestWinRate}% backtested win
+                </span>
+                <span className="text-gray-600"> · </span>
+                <span className={signal.expectancy > 0 ? 'text-bull' : 'text-bear'}>
+                  {signal.expectancy} R/trade
+                </span>
+                <span className="text-gray-600"> (n={signal.backtestSamples})</span>
+              </div>
+            )}
             {/* 3 strikes */}
             <div className="flex gap-2 mt-2">
               {[
@@ -300,7 +314,7 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, gate = 65, delay 
         <div className="flex items-center gap-2 mb-3">
           <Brain size={13} className="text-primary-400" />
           <span className="text-[10px] text-gray-600 uppercase tracking-wider font-semibold">
-            Claude's Reasoning
+            {aiName} Reasoning
           </span>
         </div>
         <p className="text-sm text-gray-300 leading-relaxed">{result.reasoning}</p>
@@ -314,7 +328,7 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, gate = 65, delay 
       {/* Indicator breakdown */}
       <div className="p-5 border-b border-white/[0.06]">
         <div className="text-[10px] text-gray-600 uppercase tracking-wider font-semibold mb-3">
-          Indicator Reading (by Claude)
+          Indicator Reading (by {aiName})
         </div>
         <div className="grid grid-cols-2 gap-2">
           {[
@@ -388,6 +402,21 @@ const EngineVsAI = ({ signal, aiResult, gate = 65 }) => {
           {eng.conf != null ? <span className="font-bold">{eng.conf}%</span> : '—'}
           <span className="text-gray-600"> · {eng.tag}</span>
         </div>
+        {/* Real backtested numbers — the honest metric, not the formula confidence */}
+        {signal?.calibrated ? (
+          <div className="mt-1.5 text-[10px] font-mono">
+            <span className={signal.backtestWinRate >= 50 ? 'text-bull' : 'text-bear'}>
+              {signal.backtestWinRate}% win
+            </span>
+            <span className="text-gray-600"> · </span>
+            <span className={signal.expectancy > 0 ? 'text-bull' : 'text-bear'}>
+              {signal.expectancy} R/trade
+            </span>
+            <span className="text-gray-600"> (n={signal.backtestSamples}, backtested)</span>
+          </div>
+        ) : signal ? (
+          <div className="mt-1.5 text-[10px] text-gray-600 font-mono">not enough history to backtest yet</div>
+        ) : null}
       </div>
 
       {/* AI — opinion only, unvalidated */}
@@ -600,8 +629,8 @@ const AIPredictions = () => {
             <p>
               <span className="text-primary-400 font-semibold">How this actually works: </span>
               The formula engine (RSI + MACD + EMA + BB) calculates indicator values from candle data.
-              Those values are sent to <span className="text-white">Claude {hasKey ? 'Haiku' : '(not connected yet)'}</span> with a structured prompt.
-              Claude reads the full picture and gives a second opinion — confirming or overriding the formula signal.
+              Those values are sent to <span className="text-white">{hasKey ? provInfo?.name : 'an AI model (not connected yet)'}</span> with a structured prompt.
+              The model reads the full picture and gives a second opinion — confirming or overriding the formula signal.
             </p>
             {!hasKey && (
               <p className="text-hold">
@@ -637,12 +666,20 @@ const AIPredictions = () => {
             <span className="text-xs font-semibold text-gray-300">API Cost Transparency</span>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center text-xs">
-            {[
-              { label: 'Model',        value: 'Claude Haiku' },
-              { label: 'Cost/analysis', value: '~$0.0003' },
-              { label: '100 calls',    value: '~$0.03' },
-              { label: '1000 calls',   value: '~$0.30' },
-            ].map(item => (
+            {(provider === 'anthropic'
+              ? [
+                  { label: 'Model',         value: provInfo?.model || 'Claude Haiku' },
+                  { label: 'Cost/analysis', value: '~$0.0003' },
+                  { label: '100 calls',     value: '~$0.03' },
+                  { label: '1000 calls',    value: '~$0.30' },
+                ]
+              : [
+                  { label: 'Model',     value: provInfo?.model || '—' },
+                  { label: 'Cost',      value: 'Free tier' },
+                  { label: 'Daily cap', value: provInfo?.free || '—' },
+                  { label: 'Provider',  value: provInfo?.name || '—' },
+                ]
+            ).map(item => (
               <div key={item.label} className="bg-white/[0.03] rounded-lg p-2">
                 <div className="text-gray-600 mb-0.5">{item.label}</div>
                 <div className="font-mono font-bold text-primary-400">{item.value}</div>

@@ -64,7 +64,7 @@ function httpsRequest(options, body) {
 // ── Groww Trading API ──────────────────────────────────────────────────────
 // Auth: exchange API key + secret for a short-lived access token (approval flow,
 // checksum = SHA256(secret + epochSeconds)). Token is cached until ~1 min before expiry.
-const GROWW = { apiKey: '', secret: '', token: null, exp: 0 }
+const GROWW = { apiKey: '', secret: '', token: null, exp: 0, cooldownUntil: 0, tokenPromise: null }
 
 // Map app symbols → Groww trading_symbol
 const GROWW_SYMBOL = { NIFTY: 'NIFTY', BANKNIFTY: 'BANKNIFTY' }
@@ -86,27 +86,51 @@ async function growwAccessToken() {
   if (GROWW.token && now < GROWW.exp - 60_000) return GROWW.token
   if (!GROWW.apiKey || !GROWW.secret) throw new Error('Groww credentials missing (GROWW_API_KEY / GROWW_API_SECRET)')
 
-  const ts = Math.floor(now / 1000).toString()
-  const checksum = crypto.createHash('sha256').update(GROWW.secret + ts).digest('hex')
-  const body = JSON.stringify({ key_type: 'approval', checksum, timestamp: ts })
+  // Cooldown: after a 429 we stop hitting the (heavily rate-limited) token API for
+  // a while, so one failure doesn't cascade into a retry storm across every request.
+  if (GROWW.cooldownUntil && now < GROWW.cooldownUntil) {
+    const secs = Math.ceil((GROWW.cooldownUntil - now) / 1000)
+    throw new Error(`Groww auth in cooldown (${secs}s left after rate limit)`)
+  }
 
-  const r = await httpsRequest({
-    hostname: 'api.groww.in', path: '/v1/token/api/access', method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${GROWW.apiKey}`,
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      'X-API-VERSION': '1.0',
-      'Content-Length': Buffer.byteLength(body),
-    },
-  }, body)
+  // Single-flight: if a token fetch is already in progress, every caller awaits the
+  // SAME request instead of each firing its own (which is what tripped the 429).
+  if (GROWW.tokenPromise) return GROWW.tokenPromise
 
-  if (r.status !== 200) throw new Error(`Groww auth ${r.status}: ${r.data.slice(0, 160)}`)
-  const j = JSON.parse(r.data)
-  GROWW.token = j.token
-  GROWW.exp   = decodeJwtExpMs(j.token) || now + 6 * 3600 * 1000
-  console.log('\x1b[32m[Groww]\x1b[0m Access token ready')
-  return GROWW.token
+  GROWW.tokenPromise = (async () => {
+    const ts = Math.floor(now / 1000).toString()
+    const checksum = crypto.createHash('sha256').update(GROWW.secret + ts).digest('hex')
+    const body = JSON.stringify({ key_type: 'approval', checksum, timestamp: ts })
+
+    const r = await httpsRequest({
+      hostname: 'api.groww.in', path: '/v1/token/api/access', method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${GROWW.apiKey}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'X-API-VERSION': '1.0',
+        'Content-Length': Buffer.byteLength(body),
+      },
+    }, body)
+
+    if (r.status === 429) {
+      GROWW.cooldownUntil = Date.now() + 5 * 60_000   // back off 5 min on rate limit
+      throw new Error(`Groww auth 429 (rate limited) — backing off 5 min: ${r.data.slice(0, 120)}`)
+    }
+    if (r.status !== 200) throw new Error(`Groww auth ${r.status}: ${r.data.slice(0, 160)}`)
+    const j = JSON.parse(r.data)
+    GROWW.token = j.token
+    GROWW.exp   = decodeJwtExpMs(j.token) || Date.now() + 6 * 3600 * 1000
+    GROWW.cooldownUntil = 0
+    console.log('\x1b[32m[Groww]\x1b[0m Access token ready')
+    return GROWW.token
+  })()
+
+  try {
+    return await GROWW.tokenPromise
+  } finally {
+    GROWW.tokenPromise = null   // clear so the next expiry can fetch a fresh token
+  }
 }
 
 async function growwGet(path) {
@@ -239,7 +263,7 @@ const marketPlugin = {
           NIFTY:    pick('NIFTY 50'),
           BANKNIFTY:pick('NIFTY BANK'),
           VIX:      pick('INDIA VIX'),
-          SENSEX:   pick('NIFTY 50'),  // placeholder — SENSEX is BSE
+          SENSEX:   null,   // SENSEX is a BSE index — not on NSE allIndices. Quote path uses Yahoo ^BSESN instead of faking it with NIFTY data.
           ts:       Date.now(),
         }))
       } catch (e) {

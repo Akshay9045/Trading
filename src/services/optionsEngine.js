@@ -150,23 +150,39 @@ const estimatePremium = (price, strike, daysToExpiry, type, vix = 10.2) => {
 // Below this, a pro waits rather than overtrade mediocre signals.
 const MIN_CONVICTION = 65
 
-// Main function: converts a base signal into an options trade
-export const buildOptionsSignal = (baseSignal, symbol, quote) => {
+// Main function: converts a base signal into an options trade.
+// `optionChain` (optional) is the normalized chain from apiService.fetchOptionChain:
+//   { strikes: Map<strike, {callLtp, callIV, putLtp, putIV}>, atmIV }
+// When provided, real per-strike LTP and IV are used; otherwise we fall back to
+// the synthetic estimate. premiumSource on the result tells you which was used.
+export const buildOptionsSignal = (baseSignal, symbol, quote, optionChain = null) => {
   if (!baseSignal || !quote) return null
 
-  const { type, entry, target, stopLoss, confidence, reasons, rrRatio, indicators } = baseSignal
-  if (type === 'HOLD' || confidence < MIN_CONVICTION) {
+  const { type, entry, target, stopLoss, confidence, reasons, rrRatio, indicators,
+          calibrated, expectancy, backtestWinRate, backtestSamples, bucketWinRate, bucketSamples } = baseSignal
+
+  // Gate: when the signal is calibrated (we have real backtest history), only trade
+  // setups with POSITIVE backtested expectancy after costs — that's the honest
+  // criterion, not an arbitrary confidence %. Without enough history, fall back to
+  // the old formula-confidence gate but flag it as untested.
+  const pass = type !== 'HOLD' && (
+    calibrated ? (expectancy != null && expectancy > 0) : confidence >= MIN_CONVICTION
+  )
+  if (!pass) {
     return {
       action: 'WAIT',
       optionType: null,
       symbol,
       price: entry,
       confidence,
+      calibrated, expectancy, backtestWinRate, backtestSamples, bucketWinRate, bucketSamples,
       reasons,
       indicators,
       message: type === 'HOLD'
         ? 'No directional bias — market consolidating. Wait for a breakout.'
-        : `Conviction ${confidence}% is below the ${MIN_CONVICTION}% professional threshold. No high-quality setup right now — waiting is the trade.`,
+        : calibrated
+          ? `Backtested expectancy is ${expectancy} R/trade over ${backtestSamples} trades — historically this setup did not make money after costs. Waiting is the trade.`
+          : `Conviction ${confidence}% is below the ${MIN_CONVICTION}% threshold and there isn't enough history to backtest it yet. No high-quality setup right now.`,
     }
   }
 
@@ -174,19 +190,42 @@ export const buildOptionsSignal = (baseSignal, symbol, quote) => {
   const atm           = getATMStrike(entry, symbol)
   const itmStrike     = getITMStrike(entry, symbol, optionType)
   const otmStrike     = getOTMStrike(entry, symbol, optionType)
-  const vix           = quote?.vix || 14.61
   const daysToExpiry  = getDaysToNextExpiry()
-  const atmPremium    = estimatePremium(entry, atm,       daysToExpiry, optionType, vix)
-  const itmPremium    = estimatePremium(entry, itmStrike, daysToExpiry, optionType, vix)
-  const otmPremium    = estimatePremium(entry, otmStrike, daysToExpiry, optionType, vix)
 
-  // Option target/SL in premium terms
-  const premiumTarget = Math.floor(atmPremium * (1 + (rrRatio * 0.5)))
-  const premiumSL     = Math.floor(atmPremium * 0.4)        // 40% of premium as stop loss
+  // Prefer the live chain's ATM implied volatility; fall back to quote VIX.
+  const vix           = optionChain?.atmIV ?? quote?.vix ?? 14.61
 
-  // Points move
+  // Real LTP for a strike from the chain (correct leg for CALL/PUT), or null.
+  const chainLTP = (strike) => {
+    const leg = optionChain?.strikes?.get?.(strike)
+    if (!leg) return null
+    const ltp = optionType === 'CALL' ? leg.callLtp : leg.putLtp
+    return ltp != null && ltp > 0 ? Math.round(ltp) : null
+  }
+
+  // Use real premium when available, else the synthetic estimate.
+  const premiumFor = (strike) =>
+    chainLTP(strike) ?? estimatePremium(entry, strike, daysToExpiry, optionType, vix)
+
+  const liveAtm       = chainLTP(atm)
+  const premiumSource = liveAtm != null ? 'live' : 'estimated'
+  const atmPremium    = premiumFor(atm)
+  const itmPremium    = premiumFor(itmStrike)
+  const otmPremium    = premiumFor(otmStrike)
+
+  // Points move on the underlying
   const pointsTarget = Math.abs(target - entry)
   const pointsSL     = Math.abs(entry - stopLoss)
+
+  // Option target/SL via DELTA, not a flat "40% of premium" rule. Delta = how much
+  // the premium moves per 1 point of spot. Use the chain's real delta when present,
+  // else ~0.5 for an ATM option. premium ≈ atmPremium ± delta × spot-move.
+  const atmLeg     = optionChain?.strikes?.get?.(atm)
+  const rawDelta   = atmLeg ? (optionType === 'CALL' ? atmLeg.callDelta : atmLeg.putDelta) : null
+  const delta      = rawDelta != null ? Math.abs(rawDelta) : 0.5
+  const deltaBasis = rawDelta != null ? 'chain-delta' : 'approx-delta-0.5'
+  const premiumTarget = Math.max(atmPremium + 1, Math.round(atmPremium + delta * pointsTarget))
+  const premiumSL     = Math.max(1,              Math.round(atmPremium - delta * pointsSL))
 
   return {
     action:         type === 'BUY' ? 'BUY CALL' : 'BUY PUT',
@@ -214,6 +253,19 @@ export const buildOptionsSignal = (baseSignal, symbol, quote) => {
     otmPremium,
     premiumTarget,
     premiumSL,
+    premiumSource,                 // 'live' (real Groww LTP) or 'estimated'
+    deltaBasis,                    // 'chain-delta' (real) or 'approx-delta-0.5'
+    impliedVol: optionChain?.atmIV != null
+      ? parseFloat(optionChain.atmIV.toFixed(1))
+      : null,
+
+    // Calibration — real backtested numbers carried through for the UI
+    calibrated,
+    backtestWinRate,
+    backtestSamples,
+    bucketWinRate,
+    bucketSamples,
+    expectancy,
 
     confidence,
     rrRatio,
