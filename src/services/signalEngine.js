@@ -152,6 +152,7 @@ export const generateSignal = (candles, opts = {}) => {
     neutralScore: parseFloat(((1 - totalBull - totalBear) * 100).toFixed(1)),
     reasons,
     indicators: {
+      adx: adx != null ? parseFloat(adx.toFixed(1)) : null,
       rsi: rsi ? parseFloat(rsi.toFixed(2)) : null,
       macd: macd ? parseFloat(macd.toFixed(2)) : null,
       macdSignal: macdSignal ? parseFloat(macdSignal.toFixed(2)) : null,

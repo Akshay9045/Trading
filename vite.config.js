@@ -119,7 +119,8 @@ async function growwGet(path) {
   return JSON.parse(r.data)
 }
 
-const growwFmtTime = (d) => d.toISOString().slice(0, 19).replace('T', ' ')
+// Groww expects exchange-local time (IST), not UTC — shift +5:30 before formatting
+const growwFmtTime = (d) => new Date(d.getTime() + 5.5 * 3600 * 1000).toISOString().slice(0, 19).replace('T', ' ')
 
 // ── NSE India session ─────────────────────────────────────────────────────
 const nseJar = {}

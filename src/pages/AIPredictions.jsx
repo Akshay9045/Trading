@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Brain, Cpu, Zap, RefreshCw, AlertCircle, CheckCircle,
@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { useMarketData, useRealtimeQuote } from '../hooks/useMarketData'
 import { getClaudeAnalysis, isAIEnabled, getActiveProvider, PROVIDER_INFO } from '../services/claudeService'
+import { generateSignal } from '../services/signalEngine'
 import { getNextExpiry, getMonthlyExpiry, getATMStrike, getOTMStrike, getITMStrike } from '../services/optionsEngine'
 import GlassCard from '../components/ui/GlassCard'
 import Badge from '../components/ui/Badge'
@@ -134,7 +135,7 @@ const ErrorCard = ({ error }) => (
 )
 
 // ── Main Claude result card ───────────────────────────────────────────────────
-const ClaudeResultCard = ({ result, symbol, livePrice, delay = 0 }) => {
+const ClaudeResultCard = ({ result, symbol, livePrice, signal, gate = 65, delay = 0 }) => {
   if (!result || result.error) return null
 
   const isCall        = result.optionType === 'CALL'
@@ -144,12 +145,15 @@ const ClaudeResultCard = ({ result, symbol, livePrice, delay = 0 }) => {
   const weeklyExpiry  = getNextExpiry()
   const monthlyExpiry = getMonthlyExpiry()
 
-  // Derive strike recommendations from AI's entry zone
-  const entryPrice    = result.entryZone || livePrice || 0
-  const suffix        = isCall ? 'CE' : 'PE'
-  const atmStrike     = entryPrice ? getATMStrike(entryPrice, symbol)  : null
-  const itmStrike     = entryPrice ? getITMStrike(entryPrice, symbol, result.optionType) : null
-  const otmStrike     = entryPrice ? getOTMStrike(entryPrice, symbol, result.optionType) : null
+  // The actionable option follows the ENGINE (math, ≥65% gate) — NOT the LLM's guess
+  const engPass    = signal && signal.type !== 'HOLD' && signal.confidence >= gate
+  const engDir     = engPass ? (signal.type === 'BUY' ? 'CALL' : 'PUT') : null
+  const engIsCall  = engDir === 'CALL'
+  const engSuffix  = engIsCall ? 'CE' : 'PE'
+  const engPrice   = livePrice || signal?.entry || 0
+  const atmStrike  = engDir && engPrice ? getATMStrike(engPrice, symbol) : null
+  const itmStrike  = engDir && engPrice ? getITMStrike(engPrice, symbol, engDir) : null
+  const otmStrike  = engDir && engPrice ? getOTMStrike(engPrice, symbol, engDir) : null
 
   return (
     <GlassCard
@@ -219,13 +223,16 @@ const ClaudeResultCard = ({ result, symbol, livePrice, delay = 0 }) => {
         </div>
       </div>
 
-      {/* Price levels */}
+      {/* Price levels — from the ENGINE (ATR-based, precise), not the LLM's round guesses */}
       <div className="p-5 border-b border-white/[0.06]">
+        <div className="text-[10px] text-gray-600 uppercase tracking-wider mb-2">
+          Engine Levels <span className="text-gray-700">· ATR-based (calculated, not guessed)</span>
+        </div>
         <div className="grid grid-cols-3 gap-3">
           {[
-            { label: 'Entry Zone',  value: result.entryZone,  cls: `text-${color}` },
-            { label: 'Target',      value: result.targetZone, cls: 'text-bull' },
-            { label: 'Stop Loss',   value: result.stopLoss,   cls: 'text-bear' },
+            { label: 'Entry',     value: signal?.entry,    cls: 'text-white' },
+            { label: 'Target',    value: signal?.target,   cls: 'text-bull' },
+            { label: 'Stop Loss', value: signal?.stopLoss, cls: 'text-bear' },
           ].map(item => (
             <div key={item.label}
               className="bg-white/[0.04] rounded-xl p-3 text-center border border-white/[0.05]">
@@ -237,26 +244,24 @@ const ClaudeResultCard = ({ result, symbol, livePrice, delay = 0 }) => {
           ))}
         </div>
 
-        {/* Live price vs entry */}
-        {livePrice && result.entryZone && (
+        {/* Live price vs engine entry */}
+        {livePrice && signal?.entry && (
           <div className="mt-3 flex items-center justify-between px-3 py-2 rounded-lg bg-white/[0.03] border border-white/[0.04] text-xs font-mono">
             <span className="text-gray-600">Live Rate</span>
             <span className="text-white font-bold">₹{formatPrice(livePrice)}</span>
-            <span className={`font-bold ${Math.abs(livePrice - result.entryZone) < result.entryZone * 0.003 ? 'text-bull' : 'text-gray-400'}`}>
-              {Math.abs(livePrice - result.entryZone) < result.entryZone * 0.003
-                ? '✓ Near entry'
-                : livePrice < result.entryZone ? '↓ Wait for entry' : '↑ Above entry'}
-            </span>
+            <span className="text-gray-400">engine entry ₹{formatPrice(signal.entry)}</span>
           </div>
         )}
 
-        {/* Buy this option banner */}
-        {atmStrike && result.signal !== 'HOLD' && (
+        {/* Actionable option — driven by the ENGINE (math, ≥65% gate), NOT the LLM */}
+        {engPass ? (
           <div className={`mt-3 rounded-xl border p-3
-            ${isCall ? 'bg-bull/10 border-bull/30' : 'bg-bear/10 border-bear/30'}`}>
-            <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Buy This Option</div>
-            <div className={`text-lg font-black font-mono ${isCall ? 'text-bull' : 'text-bear'}`}>
-              {symbol} {atmStrike} {suffix}
+            ${engIsCall ? 'bg-bull/10 border-bull/30' : 'bg-bear/10 border-bear/30'}`}>
+            <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">
+              Buy This Option <span className={engIsCall ? 'text-bull' : 'text-bear'}>· Engine {signal.confidence}%</span>
+            </div>
+            <div className={`text-lg font-black font-mono ${engIsCall ? 'text-bull' : 'text-bear'}`}>
+              {symbol} {atmStrike} {engSuffix}
             </div>
             <div className="text-[11px] text-gray-400 font-mono mt-1">
               Expiry: <span className="text-white font-bold">{weeklyExpiry}</span>
@@ -270,12 +275,21 @@ const ClaudeResultCard = ({ result, symbol, livePrice, delay = 0 }) => {
               ].map(s => (
                 <div key={s.label} className={`flex-1 rounded-lg py-2 text-center border text-xs font-mono
                   ${s.active
-                    ? (isCall ? 'bg-bull/15 border-bull/40 text-bull font-bold' : 'bg-bear/15 border-bear/40 text-bear font-bold')
+                    ? (engIsCall ? 'bg-bull/15 border-bull/40 text-bull font-bold' : 'bg-bear/15 border-bear/40 text-bear font-bold')
                     : 'bg-white/[0.04] border-white/10 text-gray-400'}`}>
                   <div className="text-[9px] text-gray-600 mb-0.5">{s.label}</div>
-                  {s.strike} {suffix}
+                  {s.strike} {engSuffix}
                 </div>
               ))}
+            </div>
+          </div>
+        ) : (
+          <div className="mt-3 rounded-xl border border-hold/30 bg-hold/10 p-3">
+            <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Engine Verdict</div>
+            <div className="text-base font-black text-hold">WAIT — no option to buy</div>
+            <div className="text-[11px] text-gray-400 mt-1">
+              Engine {signal ? `${signal.confidence}%` : '—'} (needs ≥{gate}% + a clean trend). The AI's pick above is an
+              unvalidated opinion — don't trade it.
             </div>
           </div>
         )}
@@ -342,11 +356,69 @@ const ClaudeResultCard = ({ result, symbol, livePrice, delay = 0 }) => {
   )
 }
 
+// ── Engine (math, backtested) vs AI (LLM opinion) — side by side ──────────────
+const EngineVsAI = ({ signal, aiResult, gate = 65 }) => {
+  // Math-engine verdict with the conviction gate (65% strict / 50% aggressive)
+  const eng = (() => {
+    if (!signal) return { action: 'NO DATA', conf: null, color: 'gray-500', tag: 'no candles' }
+    const pass = signal.type !== 'HOLD' && signal.confidence >= gate
+    if (!pass) return { action: 'WAIT', conf: signal.confidence, color: 'hold', tag: signal.type === 'HOLD' ? 'no strong trend' : `below ${gate}% gate` }
+    return { action: signal.type === 'BUY' ? 'BUY CALL' : 'BUY PUT', conf: signal.confidence, color: signal.type === 'BUY' ? 'bull' : 'bear', tag: 'tradeable setup' }
+  })()
+
+  const ai = aiResult && !aiResult.error
+    ? {
+        action: aiResult.signal === 'HOLD' ? 'WAIT'
+          : aiResult.optionType === 'CALL' ? 'BUY CALL'
+          : aiResult.optionType === 'PUT'  ? 'BUY PUT' : 'WAIT',
+        conf: aiResult.confidence,
+      }
+    : null
+
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      {/* Engine — the trustworthy, backtested one */}
+      <div className={`rounded-xl border border-${eng.color}/40 bg-${eng.color}/10 p-4`}>
+        <div className="flex items-center gap-1.5 mb-1.5">
+          <span className="text-[10px] font-bold text-bull uppercase tracking-wider">✓ Engine</span>
+          <span className="text-[9px] text-gray-500">backtested · trust this</span>
+        </div>
+        <div className={`text-2xl font-black text-${eng.color}`}>{eng.action}</div>
+        <div className="text-xs text-gray-400 mt-1">
+          {eng.conf != null ? <span className="font-bold">{eng.conf}%</span> : '—'}
+          <span className="text-gray-600"> · {eng.tag}</span>
+        </div>
+      </div>
+
+      {/* AI — opinion only, unvalidated */}
+      <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+        <div className="flex items-center gap-1.5 mb-1.5">
+          <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">AI opinion</span>
+          <span className="text-[9px] text-bear">unvalidated · often wrong</span>
+        </div>
+        <div className="text-2xl font-black text-gray-400">{ai ? ai.action : '—'}</div>
+        <div className="text-xs text-gray-500 mt-1">
+          {ai ? <><span className="font-bold">{ai.conf}%</span> <span className="text-gray-600">· LLM guess</span></> : 'not run yet'}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Single symbol analysis block ─────────────────────────────────────────────
 const SymbolAnalysis = ({ symbol, autoRun }) => {
   // Intraday by default — matches same-day weekly-option trading. '1D' = swing view.
   const [timeframe, setTimeframe] = useState('15m')
-  const { signal, quote: marketQuote, loading: dataLoading, error: dataError, refresh } = useMarketData(symbol, timeframe)
+  const [aggressive, setAggressive] = useState(false)   // OFF = strict 65% (disciplined); ON = 50%, no ADX filter
+  const { signal: strictSignal, candles, quote: marketQuote, loading: dataLoading, error: dataError, refresh } = useMarketData(symbol, timeframe)
+
+  // In aggressive mode, re-run the engine with relaxed filters (no ADX gate) so weaker setups surface
+  const signal = useMemo(() => {
+    if (!aggressive) return strictSignal
+    if (!candles?.length) return strictSignal
+    return generateSignal(candles, { adxMin: 0, trendFilter: true, targetATR: 1, stopATR: 1 })
+  }, [aggressive, candles, strictSignal])
+  const gate = aggressive ? 50 : 65
   const { quote: liveQuote }  = useRealtimeQuote(symbol, 5000)
   const quote                 = liveQuote || marketQuote
   const [aiResult, setAiResult]  = useState(null)
@@ -418,6 +490,20 @@ const SymbolAnalysis = ({ symbol, autoRun }) => {
               </button>
             ))}
           </div>
+
+          {/* Aggressive toggle — OFF = strict 65% (disciplined), ON = 50% (more trades, lower quality) */}
+          <button
+            onClick={() => setAggressive(a => !a)}
+            title={aggressive
+              ? 'Aggressive: trades at ≥50% (backtest: these lose money). Click for Strict.'
+              : 'Strict: only ≥65% high-quality setups. Click for Aggressive (≥50%).'}
+            className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition-all
+              ${aggressive
+                ? 'bg-bear/20 border-bear/50 text-bear'
+                : 'bg-bull/15 border-bull/40 text-bull'}`}
+          >
+            {aggressive ? '⚠ Aggressive 50%' : '✓ Strict 65%'}
+          </button>
         <button
           onClick={runAnalysis}
           disabled={aiLoading || dataLoading}
@@ -458,6 +544,9 @@ const SymbolAnalysis = ({ symbol, autoRun }) => {
         <div className="h-8 rounded-xl bg-white/[0.04] animate-pulse" />
       )}
 
+      {/* Engine vs AI — the real (math) verdict next to the LLM's opinion */}
+      {(signal || aiResult) && <EngineVsAI signal={signal} aiResult={aiResult} gate={gate} />}
+
       {aiLoading && <ThinkingBar symbol={symbol} />}
       {errorMsg  && <ErrorCard error={errorMsg} />}
       {aiResult && !aiLoading && (
@@ -465,6 +554,8 @@ const SymbolAnalysis = ({ symbol, autoRun }) => {
           result={aiResult}
           symbol={symbol}
           livePrice={quote?.price}
+          signal={signal}
+          gate={gate}
           delay={0}
         />
       )}
