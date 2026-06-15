@@ -8,36 +8,49 @@
 export const LOT_SIZES = { NIFTY: 75, BANKNIFTY: 35, SENSEX: 20, DEFAULT: 75 }
 export const getLotSize = (symbol) => LOT_SIZES[symbol] || LOT_SIZES.DEFAULT
 
-// Position sizing for BUYING an option that has a premium stop-loss.
-//   capital      total trading capital (₹)
-//   riskPct      % of capital to risk on this one trade (e.g. 1 = 1%)
-//   entryPremium per-share premium paid at entry
-//   slPremium    per-share premium at the stop-loss
-//   lotSize      contract multiplier (shares per lot)
-// Returns suggested lots within the risk budget plus the rupee figures.
-export const sizePosition = ({ capital, riskPct, entryPremium, slPremium, lotSize }) => {
+// Position sizing for BUYING an option that has a premium stop-loss + target.
+//   capital       total trading capital (₹)
+//   riskPct       % of capital to risk on this one trade (e.g. 1 = 1%)
+//   entryPremium  per-share premium paid at entry
+//   slPremium     per-share premium at the stop-loss
+//   targetPremium per-share premium at the target
+//   lotSize       contract multiplier (shares per lot)
+//   overrideLots  if set, use this many lots instead of the risk-budget suggestion
+// Returns the chosen lots plus the rupee P&L at target and at stop.
+export const sizePosition = ({ capital, riskPct, entryPremium, slPremium, targetPremium, lotSize, overrideLots }) => {
   const safe = (n) => (Number.isFinite(n) && n > 0 ? n : 0)
   capital      = safe(capital)
   entryPremium = safe(entryPremium)
   lotSize      = safe(lotSize)
   const pct    = Number.isFinite(riskPct) && riskPct > 0 ? riskPct : 0
 
-  const riskBudget   = capital * (pct / 100)                       // ₹ willing to lose on this trade
-  const perShareRisk = Math.max(0, entryPremium - safe(slPremium)) // premium lost per share if stopped
-  const perLotRisk   = perShareRisk * lotSize                      // ₹ lost per lot if stopped
-  const lots         = perLotRisk > 0 ? Math.floor(riskBudget / perLotRisk) : 0
-  const capitalDeployed = lots * entryPremium * lotSize            // ₹ needed to buy
-  const totalRisk       = lots * perLotRisk                        // actual ₹ at risk at the stop
-  const maxLossIfZero   = lots * entryPremium * lotSize            // worst case: option expires worthless
+  const riskBudget    = capital * (pct / 100)                        // ₹ willing to lose on this trade
+  const perShareRisk  = Math.max(0, entryPremium - safe(slPremium))  // premium lost per share if stopped
+  const perShareGain  = Math.max(0, safe(targetPremium) - entryPremium) // premium gained per share at target
+  const perLotRisk    = perShareRisk * lotSize                       // ₹ lost per lot if stopped
+  const perLotReward  = perShareGain * lotSize                       // ₹ gained per lot at target
+
+  const suggestedLots = perLotRisk > 0 ? Math.floor(riskBudget / perLotRisk) : 0
+  const lots          = (Number.isFinite(overrideLots) && overrideLots > 0)
+    ? Math.floor(overrideLots)
+    : suggestedLots
+
+  const capitalDeployed = lots * entryPremium * lotSize              // ₹ needed to buy
+  const totalRisk       = lots * perLotRisk                          // ₹ lost at the stop
+  const targetProfit    = lots * perLotReward                        // ₹ made at the target
+  const maxLossIfZero   = lots * entryPremium * lotSize              // worst case: option → ₹0
 
   return {
     riskBudget:      Math.round(riskBudget),
     perShareRisk:    Math.round(perShareRisk),
     perLotRisk:      Math.round(perLotRisk),
+    perLotReward:    Math.round(perLotReward),
+    suggestedLots,
     lots,
     lotSize,
     capitalDeployed: Math.round(capitalDeployed),
     totalRisk:       Math.round(totalRisk),
+    targetProfit:    Math.round(targetProfit),
     maxLossIfZero:   Math.round(maxLossIfZero),
     // Flags for the UI
     affordable:      lots >= 1,

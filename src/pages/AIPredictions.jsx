@@ -4,7 +4,7 @@ import {
   Brain, Cpu, Zap, RefreshCw, AlertCircle, CheckCircle,
   TrendingUp, TrendingDown, Minus, Key, ExternalLink, Loader, Clock
 } from 'lucide-react'
-import { useMarketData, useRealtimeQuote } from '../hooks/useMarketData'
+import { useMarketData, useRealtimeQuote, useOptionChain, calibrateSignal } from '../hooks/useMarketData'
 import { getClaudeAnalysis, isAIEnabled, getActiveProvider, PROVIDER_INFO } from '../services/claudeService'
 import { generateSignal } from '../services/signalEngine'
 import { getNextExpiry, getMonthlyExpiry, getATMStrike, getOTMStrike, getITMStrike } from '../services/optionsEngine'
@@ -13,6 +13,31 @@ import Badge from '../components/ui/Badge'
 import { formatPrice } from '../utils/formatters'
 
 const SYMBOLS = ['NIFTY', 'BANKNIFTY']
+
+// Always-trade grading: never hide the direction — show BUY CALL / BUY PUT with a
+// quality % and a one-word verdict so the user can judge. Prefers the real backtested
+// win rate; falls back to the formula strength (labeled untested). Weak / counter-trend
+// / negative-edge setups still show, just clearly flagged to avoid.
+const gradeTrade = (signal) => {
+  if (!signal) return null
+  const dir = signal.type === 'SELL'
+    ? 'PUT'
+    : signal.type === 'BUY'
+      ? 'CALL'
+      : (signal.bullScore ?? 0) >= (signal.bearScore ?? 0) ? 'CALL' : 'PUT'
+
+  const winRate = signal.calibrated ? (signal.bucketWinRate ?? signal.backtestWinRate) : null
+  const quality = Math.round(winRate != null ? winRate : (signal.confidence ?? 50))
+
+  let label, tone
+  if (signal.calibrated && signal.expectancy != null && signal.expectancy <= 0) { label = 'AVOID · negative edge'; tone = 'bear' }
+  else if (signal.trendAligned === false) { label = 'RISKY · counter-trend'; tone = 'bear' }
+  else if (quality >= 65) { label = 'STRONG'; tone = 'bull' }
+  else if (quality >= 55) { label = 'MODERATE'; tone = 'hold' }
+  else { label = 'WEAK · avoid'; tone = 'bear' }
+
+  return { dir, quality, label, tone, winRate, basis: winRate != null ? 'backtested' : 'untested' }
+}
 
 // ── No-key setup card ─────────────────────────────────────────────────────────
 const SetupCard = () => (
@@ -135,7 +160,7 @@ const ErrorCard = ({ error }) => (
 )
 
 // ── Main Claude result card ───────────────────────────────────────────────────
-const ClaudeResultCard = ({ result, symbol, livePrice, signal, gate = 65, delay = 0 }) => {
+const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, gate = 65, delay = 0 }) => {
   if (!result || result.error) return null
 
   const aiName        = PROVIDER_INFO[result.provider]?.name || 'AI'
@@ -147,10 +172,17 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, gate = 65, delay 
   const monthlyExpiry = getMonthlyExpiry()
 
   // The actionable option follows the ENGINE (math, ≥65% gate) — NOT the LLM's guess
-  const engPass    = signal && signal.type !== 'HOLD' && signal.confidence >= gate
-  const engDir     = engPass ? (signal.type === 'BUY' ? 'CALL' : 'PUT') : null
+  const grade      = gradeTrade(signal)
+  const engDir     = grade ? grade.dir : null
   const engIsCall  = engDir === 'CALL'
   const engSuffix  = engIsCall ? 'CE' : 'PE'
+  // Live market premium (LTP) for a strike, correct leg for the engine direction
+  const legPremium = (strike) => {
+    const leg = chain?.strikes?.get?.(strike)
+    if (!leg) return null
+    const ltp = engIsCall ? leg.callLtp : leg.putLtp
+    return ltp != null && ltp > 0 ? Math.round(ltp) : null
+  }
   const engPrice   = livePrice || signal?.entry || 0
   const atmStrike  = engDir && engPrice ? getATMStrike(engPrice, symbol) : null
   const itmStrike  = engDir && engPrice ? getITMStrike(engPrice, symbol, engDir) : null
@@ -255,14 +287,18 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, gate = 65, delay 
         )}
 
         {/* Actionable option — driven by the ENGINE (math, ≥65% gate), NOT the LLM */}
-        {engPass ? (
+        {engDir ? (
           <div className={`mt-3 rounded-xl border p-3
             ${engIsCall ? 'bg-bull/10 border-bull/30' : 'bg-bear/10 border-bear/30'}`}>
-            <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">
-              Buy This Option <span className={engIsCall ? 'text-bull' : 'text-bear'}>· Engine {signal.confidence}%</span>
+            <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+              Buy This Option
+              <span className={`font-bold text-${grade.tone}`}>· {grade.label} {grade.quality}%</span>
             </div>
             <div className={`text-lg font-black font-mono ${engIsCall ? 'text-bull' : 'text-bear'}`}>
               {symbol} {atmStrike} {engSuffix}
+              {legPremium(atmStrike) != null && (
+                <span className="text-sm text-white"> @ ₹{legPremium(atmStrike)} <span className="text-[10px] text-bull">(live)</span></span>
+              )}
             </div>
             <div className="text-[11px] text-gray-400 font-mono mt-1">
               Expiry: <span className="text-white font-bold">{weeklyExpiry}</span>
@@ -293,20 +329,19 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, gate = 65, delay 
                     : 'bg-white/[0.04] border-white/10 text-gray-400'}`}>
                   <div className="text-[9px] text-gray-600 mb-0.5">{s.label}</div>
                   {s.strike} {engSuffix}
+                  {legPremium(s.strike) != null && (
+                    <div className="text-[10px] text-gray-300 mt-0.5">₹{legPremium(s.strike)}</div>
+                  )}
                 </div>
               ))}
             </div>
+            {grade.tone === 'bear' && (
+              <div className="text-[10px] text-bear mt-2 leading-snug">
+                ⚠️ {grade.label.includes('counter') ? 'Counter-trend' : grade.label.includes('negative') ? 'Negative backtested edge' : 'Low-quality'} setup — shown so you can see it, but it's not a recommended trade. Prefer STRONG / MODERATE.
+              </div>
+            )}
           </div>
-        ) : (
-          <div className="mt-3 rounded-xl border border-hold/30 bg-hold/10 p-3">
-            <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Engine Verdict</div>
-            <div className="text-base font-black text-hold">WAIT — no option to buy</div>
-            <div className="text-[11px] text-gray-400 mt-1">
-              Engine {signal ? `${signal.confidence}%` : '—'} (needs ≥{gate}% + a clean trend). The AI's pick above is an
-              unvalidated opinion — don't trade it.
-            </div>
-          </div>
-        )}
+        ) : null}
       </div>
 
       {/* Claude's reasoning */}
@@ -372,13 +407,11 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, gate = 65, delay 
 
 // ── Engine (math, backtested) vs AI (LLM opinion) — side by side ──────────────
 const EngineVsAI = ({ signal, aiResult, gate = 65 }) => {
-  // Math-engine verdict with the conviction gate (65% strict / 50% aggressive)
-  const eng = (() => {
-    if (!signal) return { action: 'NO DATA', conf: null, color: 'gray-500', tag: 'no candles' }
-    const pass = signal.type !== 'HOLD' && signal.confidence >= gate
-    if (!pass) return { action: 'WAIT', conf: signal.confidence, color: 'hold', tag: signal.type === 'HOLD' ? 'no strong trend' : `below ${gate}% gate` }
-    return { action: signal.type === 'BUY' ? 'BUY CALL' : 'BUY PUT', conf: signal.confidence, color: signal.type === 'BUY' ? 'bull' : 'bear', tag: 'tradeable setup' }
-  })()
+  // Always-trade: show the graded directional pick (Strong / Moderate / Weak / Avoid)
+  const g = gradeTrade(signal)
+  const eng = (signal && g)
+    ? { action: g.dir === 'CALL' ? 'BUY CALL' : 'BUY PUT', conf: g.quality, color: g.tone, tag: g.label }
+    : { action: 'NO DATA', conf: null, color: 'gray-500', tag: 'no candles' }
 
   const ai = aiResult && !aiResult.error
     ? {
@@ -438,18 +471,20 @@ const EngineVsAI = ({ signal, aiResult, gate = 65 }) => {
 const SymbolAnalysis = ({ symbol, autoRun }) => {
   // Intraday by default — matches same-day weekly-option trading. '1D' = swing view.
   const [timeframe, setTimeframe] = useState('15m')
-  const [aggressive, setAggressive] = useState(false)   // OFF = strict 65% (disciplined); ON = 50%, no ADX filter
   const { signal: strictSignal, candles, quote: marketQuote, loading: dataLoading, error: dataError, refresh } = useMarketData(symbol, timeframe)
 
-  // In aggressive mode, re-run the engine with relaxed filters (no ADX gate) so weaker setups surface
+  // Always-trade: the engine always returns a directional pick (never WAIT). Quality is
+  // shown via the grade, not by hiding the trade. Calibrated with the backtest win rate.
   const signal = useMemo(() => {
-    if (!aggressive) return strictSignal
     if (!candles?.length) return strictSignal
-    return generateSignal(candles, { adxMin: 0, trendFilter: true, targetATR: 1, stopATR: 1 })
-  }, [aggressive, candles, strictSignal])
-  const gate = aggressive ? 50 : 65
+    return calibrateSignal(
+      generateSignal(candles, { alwaysSignal: true, adxMin: 0, trendFilter: false, targetATR: 1, stopATR: 1 }),
+      candles
+    )
+  }, [candles, strictSignal])
   const { quote: liveQuote }  = useRealtimeQuote(symbol, 5000)
   const quote                 = liveQuote || marketQuote
+  const chain                 = useOptionChain(symbol, quote?.price)   // live option premiums
   const [aiResult, setAiResult]  = useState(null)
   const [aiLoading, setAiLoading] = useState(false)
   const [errorMsg, setErrorMsg]  = useState(null)
@@ -520,19 +555,6 @@ const SymbolAnalysis = ({ symbol, autoRun }) => {
             ))}
           </div>
 
-          {/* Aggressive toggle — OFF = strict 65% (disciplined), ON = 50% (more trades, lower quality) */}
-          <button
-            onClick={() => setAggressive(a => !a)}
-            title={aggressive
-              ? 'Aggressive: trades at ≥50% (backtest: these lose money). Click for Strict.'
-              : 'Strict: only ≥65% high-quality setups. Click for Aggressive (≥50%).'}
-            className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition-all
-              ${aggressive
-                ? 'bg-bear/20 border-bear/50 text-bear'
-                : 'bg-bull/15 border-bull/40 text-bull'}`}
-          >
-            {aggressive ? '⚠ Aggressive 50%' : '✓ Strict 65%'}
-          </button>
         <button
           onClick={runAnalysis}
           disabled={aiLoading || dataLoading}
@@ -574,7 +596,7 @@ const SymbolAnalysis = ({ symbol, autoRun }) => {
       )}
 
       {/* Engine vs AI — the real (math) verdict next to the LLM's opinion */}
-      {(signal || aiResult) && <EngineVsAI signal={signal} aiResult={aiResult} gate={gate} />}
+      {(signal || aiResult) && <EngineVsAI signal={signal} aiResult={aiResult} />}
 
       {aiLoading && <ThinkingBar symbol={symbol} />}
       {errorMsg  && <ErrorCard error={errorMsg} />}
@@ -584,7 +606,7 @@ const SymbolAnalysis = ({ symbol, autoRun }) => {
           symbol={symbol}
           livePrice={quote?.price}
           signal={signal}
-          gate={gate}
+          chain={chain}
           delay={0}
         />
       )}

@@ -27,7 +27,7 @@ const SIGNAL_WEIGHTS = {
 export const generateSignal = (candles, opts = {}) => {
   // targetATR/stopATR = ATR multiples for target & stop; trendFilter = only trade with the EMA trend.
   // adxMin = skip trades when ADX (trend strength) is below this (0 = off). Defaults are backtest-validated.
-  const { targetATR = 1, stopATR = 1, trendFilter = true, adxMin = 22, htfFactor = 0 } = opts
+  const { targetATR = 1, stopATR = 1, trendFilter = true, adxMin = 22, htfFactor = 0, alwaysSignal = false } = opts
   if (!candles || candles.length < 50) return null
 
   const closes = candles.map(c => c.close)
@@ -99,25 +99,33 @@ export const generateSignal = (candles, opts = {}) => {
   if (diff > 0.1) signalType = 'BUY'
   else if (diff < -0.1) signalType = 'SELL'
 
-  // Trend filter — only take CALLs in an uptrend and PUTs in a downtrend
-  if (trendFilter && signalType !== 'HOLD') {
-    const uptrend   = price > ema50 && ema20 > ema50
-    const downtrend = price < ema50 && ema20 < ema50
-    if (signalType === 'BUY'  && !uptrend)   signalType = 'HOLD'
-    if (signalType === 'SELL' && !downtrend) signalType = 'HOLD'
+  const uptrend   = price > ema50 && ema20 > ema50
+  const downtrend = price < ema50 && ema20 < ema50
+
+  if (alwaysSignal) {
+    // Never sit out: always take the directional lean, even when weak or counter-trend.
+    // Quality is communicated via `trendAligned` + confidence/backtest grading, not by hiding it.
+    if (signalType === 'HOLD') signalType = diff >= 0 ? 'BUY' : 'SELL'
+  } else {
+    // Trend filter — only take CALLs in an uptrend and PUTs in a downtrend
+    if (trendFilter && signalType !== 'HOLD') {
+      if (signalType === 'BUY'  && !uptrend)   signalType = 'HOLD'
+      if (signalType === 'SELL' && !downtrend) signalType = 'HOLD'
+    }
+    // ADX filter — skip choppy/ranging markets where breakouts fail
+    if (adxMin > 0 && signalType !== 'HOLD' && (adx == null || adx < adxMin)) {
+      signalType = 'HOLD'
+    }
+    // Higher-timeframe confirmation — only trade if the bigger timeframe agrees
+    if (htfFactor > 1 && signalType !== 'HOLD') {
+      const htf = higherTimeframeTrend(candles, htfFactor)
+      if (signalType === 'BUY'  && htf !== 'up')   signalType = 'HOLD'
+      if (signalType === 'SELL' && htf !== 'down') signalType = 'HOLD'
+    }
   }
 
-  // ADX filter — skip choppy/ranging markets where breakouts fail
-  if (adxMin > 0 && signalType !== 'HOLD' && (adx == null || adx < adxMin)) {
-    signalType = 'HOLD'
-  }
-
-  // Higher-timeframe confirmation — only trade if the bigger timeframe agrees
-  if (htfFactor > 1 && signalType !== 'HOLD') {
-    const htf = higherTimeframeTrend(candles, htfFactor)
-    if (signalType === 'BUY'  && htf !== 'up')   signalType = 'HOLD'
-    if (signalType === 'SELL' && htf !== 'down') signalType = 'HOLD'
-  }
+  // Is the chosen direction with the prevailing EMA trend? (used for quality grading)
+  const trendAligned = (signalType === 'BUY' && uptrend) || (signalType === 'SELL' && downtrend)
 
   // Calculate entry, target, stop loss using ATR
   const atrValue = atr || price * 0.005
@@ -147,6 +155,7 @@ export const generateSignal = (candles, opts = {}) => {
     stopLoss,
     confidence,
     rrRatio,
+    trendAligned,
     bullScore: parseFloat((totalBull * 100).toFixed(1)),
     bearScore: parseFloat((totalBear * 100).toFixed(1)),
     neutralScore: parseFloat(((1 - totalBull - totalBear) * 100).toFixed(1)),

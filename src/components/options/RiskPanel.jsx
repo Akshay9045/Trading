@@ -13,22 +13,28 @@ const RiskPanel = ({ optionsSignal, symbol, delay = 0 }) => {
   const [settings, setSettings] = useState(loadSettings)
   const [log, setLog]           = useState(loadTodayLog)
   const [amt, setAmt]           = useState('')
+  const [lotSize, setLotSize]   = useState(getLotSize(symbol))
+  const [manualLots, setManualLots] = useState('')   // '' = auto-size by risk budget
 
+  // Reset lot size to the default when the symbol changes (NIFTY ↔ BANKNIFTY)
+  useEffect(() => { setLotSize(getLotSize(symbol)) }, [symbol])
   useEffect(() => { saveSettings(settings) }, [settings])
   useEffect(() => { saveTodayLog(log) }, [log])
 
   const update = (k, v) => setSettings(s => ({ ...s, [k]: v === '' ? '' : Number(v) }))
 
   const actionable = optionsSignal && optionsSignal.action !== 'WAIT'
-  const lotSize    = getLotSize(symbol)
 
   const sizing = useMemo(() => actionable
     ? sizePosition({
         capital: settings.capital, riskPct: settings.riskPct,
-        entryPremium: optionsSignal.atmPremium, slPremium: optionsSignal.premiumSL, lotSize,
+        entryPremium: optionsSignal.atmPremium, slPremium: optionsSignal.premiumSL,
+        targetPremium: optionsSignal.premiumTarget,
+        lotSize: Number(lotSize), overrideLots: manualLots === '' ? undefined : Number(manualLots),
       })
     : null,
-    [actionable, settings.capital, settings.riskPct, optionsSignal?.atmPremium, optionsSignal?.premiumSL, lotSize])
+    [actionable, settings.capital, settings.riskPct, optionsSignal?.atmPremium,
+     optionsSignal?.premiumSL, optionsSignal?.premiumTarget, lotSize, manualLots])
 
   const pnl     = dayPnL(log)
   const stopped = lossLimitHit(log, settings.dailyLossLimit)
@@ -79,15 +85,31 @@ const RiskPanel = ({ optionsSignal, symbol, delay = 0 }) => {
       {actionable && sizing ? (
         <div className="rounded-xl border border-white/[0.07] bg-white/[0.02] p-3 mb-4">
           <div className="text-[10px] text-gray-600 uppercase tracking-wider mb-2">
-            Suggested Size · {symbol} {optionsSignal.atmStrike} {optionsSignal.optionType === 'CALL' ? 'CE' : 'PE'} (lot {lotSize})
+            Position · {symbol} {optionsSignal.atmStrike} {optionsSignal.optionType === 'CALL' ? 'CE' : 'PE'} @ ₹{optionsSignal.atmPremium}
           </div>
+
+          {/* Lot size (editable) + manual lots override */}
+          <div className="grid grid-cols-2 gap-2 mb-3">
+            <div>
+              <div className="text-[10px] text-gray-600 mb-1">Lot size (qty/lot)</div>
+              <input type="number" className={inputCls} value={lotSize}
+                onChange={e => setLotSize(e.target.value === '' ? '' : Number(e.target.value))} />
+            </div>
+            <div>
+              <div className="text-[10px] text-gray-600 mb-1">Lots (blank = auto)</div>
+              <input type="number" className={inputCls} placeholder={`auto: ${sizing.suggestedLots}`}
+                value={manualLots} onChange={e => setManualLots(e.target.value)} />
+            </div>
+          </div>
+
           {sizing.affordable ? (
             <div className="space-y-1.5">
               {[
-                { label: `Buy ${sizing.lots} lot${sizing.lots > 1 ? 's' : ''}`, value: `${sizing.lots * lotSize} qty`, cls: 'text-bull font-bold' },
-                { label: 'Capital deployed',  value: fmt(sizing.capitalDeployed), cls: 'text-white' },
-                { label: 'At risk (to SL)',   value: fmt(sizing.totalRisk),       cls: 'text-bear' },
-                { label: 'Max loss (→ ₹0)',   value: fmt(sizing.maxLossIfZero),   cls: 'text-bear' },
+                { label: `Buy ${sizing.lots} lot${sizing.lots > 1 ? 's' : ''}`, value: `${sizing.lots * Number(lotSize)} qty`, cls: 'text-bull font-bold' },
+                { label: 'Capital needed',    value: fmt(sizing.capitalDeployed), cls: 'text-white' },
+                { label: '🎯 Profit at target', value: `+${fmt(sizing.targetProfit)}`, cls: 'text-bull font-bold' },
+                { label: '🛑 Loss at stop',     value: `-${fmt(sizing.totalRisk)}`,    cls: 'text-bear font-bold' },
+                { label: 'Worst case (→ ₹0)', value: `-${fmt(sizing.maxLossIfZero)}`, cls: 'text-bear' },
                 { label: 'Risk budget',       value: fmt(sizing.riskBudget),      cls: 'text-gray-400' },
               ].map(r => (
                 <div key={r.label} className="flex items-center justify-between text-xs">
@@ -98,11 +120,14 @@ const RiskPanel = ({ optionsSignal, symbol, delay = 0 }) => {
               {sizing.deploysOverHalf && (
                 <p className="text-[10px] text-hold mt-1.5">⚠️ This deploys over 50% of capital into one trade — consider fewer lots.</p>
               )}
+              {manualLots !== '' && Number(manualLots) > sizing.suggestedLots && (
+                <p className="text-[10px] text-hold mt-1.5">⚠️ {manualLots} lots exceeds the {sizing.suggestedLots}-lot risk-budget suggestion — you're risking more than {settings.riskPct}%.</p>
+              )}
             </div>
           ) : (
             <p className="text-xs text-bear">
               Can't afford even 1 lot within your {settings.riskPct}% risk budget ({fmt(sizing.riskBudget)}).
-              The per-lot risk is {fmt(sizing.perLotRisk)}. Increase capital, widen risk %, or skip this trade.
+              The per-lot risk is {fmt(sizing.perLotRisk)}. Increase capital, widen risk %, or type lots manually above to override.
             </p>
           )}
         </div>

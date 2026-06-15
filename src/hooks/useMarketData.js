@@ -9,7 +9,7 @@ import { runBacktest } from '../services/backtestEngine'
 // confidence bucket. `calibrated` is true only when we have enough samples to trust.
 const MIN_BUCKET_SAMPLES = 8
 
-const calibrateSignal = (signal, candles) => {
+export const calibrateSignal = (signal, candles) => {
   if (!signal || signal.type === 'HOLD' || !candles || candles.length < 90) return signal
   let bt
   try { bt = runBacktest(candles) } catch { return signal }

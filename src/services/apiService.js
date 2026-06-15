@@ -197,37 +197,51 @@ const pickNum = (obj, ...keys) => {
 }
 
 // Normalize a raw Groww option-chain payload into:
-//   { strikes: Map<strike, {callLtp, callIV, putLtp, putIV}>, atmIV: number|null, expiry }
+//   { strikes: Map<strike, {callLtp, callIV, callDelta, putLtp, putIV, putDelta}>, atmIV, count }
+//
+// Groww's live format (verified against the real API):
+//   { underlying_ltp, strikes: { "23950": { CE: { ltp, greeks: {delta, iv} }, PE: {...} } } }
+// `ltp` is the live market premium; IV and delta live inside each leg's `greeks`.
 const normalizeOptionChain = (raw, spot) => {
-  // The array of per-strike rows lives under one of these keys
-  const rows =
-    raw?.option_chains || raw?.option_chain || raw?.optionChains ||
-    raw?.chains || raw?.data || (Array.isArray(raw) ? raw : [])
-
   const strikes = new Map()
-  for (const row of rows) {
-    const strike = pickNum(row, 'strike_price', 'strikePrice', 'strike')
-    if (strike == null) continue
-    const call = row.call_option || row.call_options || row.callOption || row.ce || row.CE
-    const put  = row.put_option  || row.put_options  || row.putOption  || row.pe || row.PE
-    // delta may be flat or nested under a `greeks` object
-    const pickDelta = (leg) => pickNum(leg, 'delta') ?? pickNum(leg?.greeks, 'delta')
-    strikes.set(strike, {
-      callLtp:   pickNum(call, 'ltp', 'last_price', 'lastPrice', 'close_price', 'close'),
-      callIV:    pickNum(call, 'implied_volatility', 'impliedVolatility', 'iv'),
-      callDelta: pickDelta(call),
-      putLtp:    pickNum(put,  'ltp', 'last_price', 'lastPrice', 'close_price', 'close'),
-      putIV:     pickNum(put,  'implied_volatility', 'impliedVolatility', 'iv'),
-      putDelta:  pickDelta(put),
-    })
+  // greeks-aware getters
+  const legLtp   = (leg) => pickNum(leg, 'ltp', 'last_price', 'lastPrice', 'close_price', 'close')
+  const legIV    = (leg) => pickNum(leg?.greeks, 'iv', 'implied_volatility') ?? pickNum(leg, 'iv', 'implied_volatility', 'impliedVolatility')
+  const legDelta = (leg) => pickNum(leg?.greeks, 'delta') ?? pickNum(leg, 'delta')
+  const setLeg   = (strike, call, put) => strikes.set(strike, {
+    callLtp: legLtp(call), callIV: legIV(call), callDelta: legDelta(call),
+    putLtp:  legLtp(put),  putIV:  legIV(put),  putDelta:  legDelta(put),
+  })
+
+  if (raw?.strikes && typeof raw.strikes === 'object' && !Array.isArray(raw.strikes)) {
+    // Real Groww shape — object keyed by strike
+    for (const [k, legs] of Object.entries(raw.strikes)) {
+      const strike = Number(k)
+      if (!Number.isFinite(strike) || !legs) continue
+      setLeg(strike, legs.CE || legs.ce, legs.PE || legs.pe)
+    }
+  } else {
+    // Fallback — array-of-rows shape (older/other API versions)
+    const rows = raw?.option_chains || raw?.option_chain || raw?.chains || raw?.data || (Array.isArray(raw) ? raw : [])
+    for (const row of rows) {
+      const strike = pickNum(row, 'strike_price', 'strikePrice', 'strike')
+      if (strike == null) continue
+      setLeg(strike, row.call_option || row.call_options || row.callOption || row.ce || row.CE,
+                     row.put_option  || row.put_options  || row.putOption  || row.pe || row.PE)
+    }
   }
+
+  // Use the passed spot, else the chain's own underlying LTP
+  const useSpot = (Number.isFinite(spot) && spot > 0)
+    ? spot
+    : pickNum(raw, 'underlying_ltp', 'underlyingLtp', 'spot', 'spot_price')
 
   // ATM IV = IV of the strike nearest spot (average of call/put legs)
   let atmIV = null
-  if (spot && strikes.size) {
+  if (useSpot && strikes.size) {
     let best = null, bestDist = Infinity
     for (const [strike, leg] of strikes) {
-      const d = Math.abs(strike - spot)
+      const d = Math.abs(strike - useSpot)
       if (d < bestDist) { bestDist = d; best = leg }
     }
     if (best) {
