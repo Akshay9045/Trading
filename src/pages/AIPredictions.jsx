@@ -192,6 +192,14 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, gate = 65,
   const dispEntry = entryPx
   const dispTarget = engIsCall ? entryPx + tgtDist : entryPx - tgtDist
   const dispStop   = engIsCall ? entryPx - slDist  : entryPx + slDist
+
+  // Ideal pullback-entry zone: EMA9/EMA20 act as support (CALL) or resistance (PUT).
+  // A better average fill than chasing — if price pulls back into this band. Heuristic.
+  const e9  = signal?.indicators?.ema9
+  const e20 = signal?.indicators?.ema20
+  const hasZone = e9 != null && e20 != null
+  const zoneLo  = hasZone ? Math.min(e9, e20) : null
+  const zoneHi  = hasZone ? Math.max(e9, e20) : null
   const engPrice   = livePrice || signal?.entry || 0
   const atmStrike  = engDir && engPrice ? getATMStrike(engPrice, symbol) : null
   const itmStrike  = engDir && engPrice ? getITMStrike(engPrice, symbol, engDir) : null
@@ -292,6 +300,19 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, gate = 65,
             <span className="text-gray-600">Live Rate</span>
             <span className="text-white font-bold">₹{formatPrice(livePrice)}</span>
             <span className="text-gray-400">signal formed at ₹{formatPrice(signal.entry)}</span>
+          </div>
+        )}
+
+        {/* Ideal pullback-entry zone (EMA9/EMA20) — shown below the live entry */}
+        {hasZone && (
+          <div className="mt-2 flex items-start gap-2 px-3 py-2 rounded-lg bg-primary-500/8 border border-primary-500/20 text-[11px] leading-snug">
+            <span className="text-gray-500 flex-shrink-0 font-semibold">Ideal entry</span>
+            <div className="text-gray-400">
+              <span className="font-mono font-bold text-primary-300">₹{formatPrice(zoneLo)} – ₹{formatPrice(zoneHi)}</span>
+              {' '}on a pullback to EMA9/EMA20 ({engIsCall ? 'support' : 'resistance'}) — a better fill if price dips.
+              Or enter now at <span className="font-mono text-white">₹{formatPrice(dispEntry)}</span> if you don't want to wait.
+              <span className="text-gray-600"> Zone may not be reached in a strong trend.</span>
+            </div>
           </div>
         )}
 
@@ -422,6 +443,10 @@ const EngineVsAI = ({ signal, aiResult, gate = 65 }) => {
     ? { action: g.dir === 'CALL' ? 'BUY CALL' : 'BUY PUT', conf: g.quality, color: g.tone, tag: g.label }
     : { action: 'NO DATA', conf: null, color: 'gray-500', tag: 'no candles' }
 
+  // Bad grades (AVOID / RISKY / WEAK = bear tone) render MUTED gray, not alarming red —
+  // a low-quality trade shouldn't look like a strong directional signal.
+  const displayColor = eng.color === 'bear' ? 'gray-500' : eng.color
+
   const ai = aiResult && !aiResult.error
     ? {
         action: aiResult.signal === 'HOLD' ? 'WAIT'
@@ -434,12 +459,15 @@ const EngineVsAI = ({ signal, aiResult, gate = 65 }) => {
   return (
     <div className="grid grid-cols-2 gap-3">
       {/* Engine — the trustworthy, backtested one */}
-      <div className={`rounded-xl border border-${eng.color}/40 bg-${eng.color}/10 p-4`}>
+      <div className={`rounded-xl border border-${displayColor}/40 bg-${displayColor}/10 p-4`}>
         <div className="flex items-center gap-1.5 mb-1.5">
           <span className="text-[10px] font-bold text-bull uppercase tracking-wider">✓ Engine</span>
           <span className="text-[9px] text-gray-500">backtested · trust this</span>
         </div>
-        <div className={`text-2xl font-black text-${eng.color}`}>{eng.action}</div>
+        {eng.color === 'bear' && eng.action !== 'NO DATA' && (
+          <div className="text-[11px] font-bold text-bear uppercase tracking-wider mb-0.5">⚠ Skip this</div>
+        )}
+        <div className={`text-2xl font-black text-${displayColor}`}>{eng.action}</div>
         <div className="text-xs text-gray-400 mt-1">
           {eng.conf != null ? <span className="font-bold">{eng.conf}%</span> : '—'}
           <span className="text-gray-600"> · {eng.tag}</span>
