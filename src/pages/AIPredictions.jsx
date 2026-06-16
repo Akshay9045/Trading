@@ -183,6 +183,15 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, gate = 65,
     const ltp = engIsCall ? leg.callLtp : leg.putLtp
     return ltp != null && ltp > 0 ? Math.round(ltp) : null
   }
+
+  // Re-anchor entry/target/stop to the LIVE price — so Entry matches the current market
+  // (not the stale candle close), keeping the engine's ATR target/stop distances.
+  const tgtDist   = signal ? Math.abs(signal.target - signal.entry) : 0
+  const slDist    = signal ? Math.abs(signal.entry - signal.stopLoss) : 0
+  const entryPx   = livePrice || signal?.entry || 0
+  const dispEntry = entryPx
+  const dispTarget = engIsCall ? entryPx + tgtDist : entryPx - tgtDist
+  const dispStop   = engIsCall ? entryPx - slDist  : entryPx + slDist
   const engPrice   = livePrice || signal?.entry || 0
   const atmStrike  = engDir && engPrice ? getATMStrike(engPrice, symbol) : null
   const itmStrike  = engDir && engPrice ? getITMStrike(engPrice, symbol, engDir) : null
@@ -259,13 +268,13 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, gate = 65,
       {/* Price levels — from the ENGINE (ATR-based, precise), not the LLM's round guesses */}
       <div className="p-5 border-b border-white/[0.06]">
         <div className="text-[10px] text-gray-600 uppercase tracking-wider mb-2">
-          Engine Levels <span className="text-gray-700">· ATR-based (calculated, not guessed)</span>
+          Levels <span className="text-gray-700">· anchored to live price · ATR-based target/stop</span>
         </div>
         <div className="grid grid-cols-3 gap-3">
           {[
-            { label: 'Entry',     value: signal?.entry,    cls: 'text-white' },
-            { label: 'Target',    value: signal?.target,   cls: 'text-bull' },
-            { label: 'Stop Loss', value: signal?.stopLoss, cls: 'text-bear' },
+            { label: 'Entry (≈ live)', value: dispEntry,  cls: 'text-white' },
+            { label: 'Target',         value: dispTarget, cls: 'text-bull' },
+            { label: 'Stop Loss',      value: dispStop,   cls: 'text-bear' },
           ].map(item => (
             <div key={item.label}
               className="bg-white/[0.04] rounded-xl p-3 text-center border border-white/[0.05]">
@@ -277,12 +286,12 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, gate = 65,
           ))}
         </div>
 
-        {/* Live price vs engine entry */}
+        {/* Live price vs the price when the signal formed (last candle close) */}
         {livePrice && signal?.entry && (
           <div className="mt-3 flex items-center justify-between px-3 py-2 rounded-lg bg-white/[0.03] border border-white/[0.04] text-xs font-mono">
             <span className="text-gray-600">Live Rate</span>
             <span className="text-white font-bold">₹{formatPrice(livePrice)}</span>
-            <span className="text-gray-400">engine entry ₹{formatPrice(signal.entry)}</span>
+            <span className="text-gray-400">signal formed at ₹{formatPrice(signal.entry)}</span>
           </div>
         )}
 
