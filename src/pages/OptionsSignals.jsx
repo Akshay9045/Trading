@@ -4,9 +4,10 @@ import {
   TrendingUp, TrendingDown, RefreshCw, Clock, Info,
   Zap, ChevronRight, AlertCircle, ArrowUp, ArrowDown, Wifi
 } from 'lucide-react'
-import { useMarketData, useRealtimeQuote } from '../hooks/useMarketData'
+import { useMarketData, useRealtimeQuote, useOptionChain } from '../hooks/useMarketData'
 import { buildOptionsSignal, getNextExpiry } from '../services/optionsEngine'
 import OptionsSignalCard from '../components/options/OptionsSignalCard'
+import RiskPanel from '../components/options/RiskPanel'
 import GlassCard from '../components/ui/GlassCard'
 import Badge from '../components/ui/Badge'
 import { formatPrice } from '../utils/formatters'
@@ -150,7 +151,8 @@ const SymbolTab = ({ symbol, isSelected, onClick }) => {
 const CompactCard = ({ symbol, delay }) => {
   const { quote }  = useRealtimeQuote(symbol, 5000)
   const { signal } = useMarketData(symbol, '1D')
-  const opts = buildOptionsSignal(signal, symbol, quote)
+  const chain      = useOptionChain(symbol, quote?.price)
+  const opts = buildOptionsSignal(signal, symbol, quote, chain)
 
   if (!opts) return null
 
@@ -193,8 +195,10 @@ const CompactCard = ({ symbol, delay }) => {
       <div className="flex gap-2 mb-3">
         {[
           { label: 'Strike', value: `${opts.atmStrike} ${isCall ? 'CE' : 'PE'}`, highlight: true },
-          { label: 'Premium', value: `~₹${opts.atmPremium}` },
-          { label: 'Confidence', value: `${opts.confidence}%` },
+          { label: opts.premiumSource === 'live' ? 'Premium' : 'Premium (est)', value: `${opts.premiumSource === 'live' ? '₹' : '~₹'}${opts.atmPremium}` },
+          opts.calibrated
+            ? { label: 'Win Rate', value: `${opts.backtestWinRate}%` }
+            : { label: 'Strength', value: `${opts.confidence}%` },
         ].map(b => (
           <div key={b.label}
             className={`flex-1 rounded-xl p-2.5 text-center border
@@ -225,6 +229,11 @@ const CompactCard = ({ symbol, delay }) => {
 
       <div className="flex justify-between mt-3 pt-2 border-t border-white/[0.05] text-[10px] text-gray-600">
         <span>R:R = 1:{opts.rrRatio}</span>
+        {opts.calibrated && (
+          <span className={opts.expectancy > 0 ? 'text-bull' : 'text-bear'}>
+            {opts.expectancy} R/trade
+          </span>
+        )}
         <span>Expiry: {opts.expiry}</span>
       </div>
     </GlassCard>
@@ -265,11 +274,18 @@ const HowToUse = () => (
 // ── Main page ─────────────────────────────────────────────────────────────────
 const OptionsSignals = () => {
   const [selected, setSelected]   = useState('NIFTY')
+  const [refreshKey, setRefreshKey]  = useState(0)
   const { signal, loading, refresh } = useMarketData(selected, '1D')
   const { quote: liveQuote }         = useRealtimeQuote(selected, 5000)   // live 5s
+  const optionChain                  = useOptionChain(selected, liveQuote?.price, refreshKey)
 
-  // Build options signal using live quote for price, candle signal for direction
-  const optionsSignal = buildOptionsSignal(signal, selected, liveQuote)
+  // Manual refresh: reload candles AND re-pull the option chain on click
+  const handleRefresh = () => { refresh(); setRefreshKey(k => k + 1) }
+
+  // Build options signal using live quote for price, candle signal for direction,
+  // and the live option chain for real per-strike premiums + IV (falls back to
+  // estimated premiums when the chain is unavailable).
+  const optionsSignal = buildOptionsSignal(signal, selected, liveQuote, optionChain)
 
   return (
     <div className="space-y-5">
@@ -289,7 +305,7 @@ const OptionsSignals = () => {
             <span className="text-[11px] font-mono text-bull font-semibold">LIVE · 5s refresh</span>
           </div>
           <button
-            onClick={refresh}
+            onClick={handleRefresh}
             className="p-2 rounded-lg bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.08] transition-all text-gray-400 hover:text-white"
           >
             <RefreshCw size={14} />
@@ -373,14 +389,26 @@ const OptionsSignals = () => {
                   { label: 'Live Rate',       value: liveQuote ? `₹${formatPrice(liveQuote.price)}` : '…',    cls: 'text-white font-mono' },
                   { label: 'Action',          value: optionsSignal.action,                                      cls: optionsSignal.optionType === 'CALL' ? 'text-bull' : 'text-bear' },
                   { label: 'Strike',          value: `${optionsSignal.atmStrike} ${optionsSignal.optionType === 'CALL' ? 'CE' : 'PE'}`, cls: 'text-white font-mono' },
-                  { label: 'Buy Premium At',  value: `~₹${optionsSignal.atmPremium}`,                          cls: optionsSignal.optionType === 'CALL' ? 'text-bull' : 'text-bear' },
+                  { label: optionsSignal.premiumSource === 'live' ? 'Buy Premium At (live)' : 'Buy Premium At (est)',
+                    value: `${optionsSignal.premiumSource === 'live' ? '₹' : '~₹'}${optionsSignal.atmPremium}`,
+                    cls: optionsSignal.optionType === 'CALL' ? 'text-bull' : 'text-bear' },
+                  ...(optionsSignal.impliedVol != null
+                    ? [{ label: 'Implied Volatility', value: `${optionsSignal.impliedVol}%`, cls: 'text-gray-300 font-mono' }]
+                    : []),
                   { label: 'Target Premium',  value: `~₹${optionsSignal.premiumTarget}`,                       cls: 'text-bull' },
                   { label: 'SL Premium',      value: `~₹${optionsSignal.premiumSL}`,                           cls: 'text-bear' },
                   { label: 'Spot Entry',      value: `₹${formatPrice(optionsSignal.spotEntry)}`,               cls: 'text-gray-300 font-mono' },
                   { label: 'Spot Target',     value: `₹${formatPrice(optionsSignal.spotTarget)}`,              cls: 'text-bull font-mono' },
                   { label: 'Spot Stop Loss',  value: `₹${formatPrice(optionsSignal.spotStopLoss)}`,            cls: 'text-bear font-mono' },
                   { label: 'Risk : Reward',   value: `1 : ${optionsSignal.rrRatio}`,                          cls: 'text-primary-400' },
-                  { label: 'Confidence',      value: `${optionsSignal.confidence}%`,                           cls: optionsSignal.optionType === 'CALL' ? 'text-bull' : 'text-bear' },
+                  ...(optionsSignal.calibrated
+                    ? [
+                        { label: 'Backtested Win Rate', value: `${optionsSignal.backtestWinRate}% (n=${optionsSignal.backtestSamples})`, cls: optionsSignal.backtestWinRate >= 50 ? 'text-bull' : 'text-bear' },
+                        { label: 'Expectancy',          value: `${optionsSignal.expectancy} R/trade`,                                    cls: optionsSignal.expectancy > 0 ? 'text-bull' : 'text-bear' },
+                      ]
+                    : [
+                        { label: 'Signal Strength', value: `${optionsSignal.confidence}% (untested)`, cls: 'text-gray-400' },
+                      ]),
                   { label: 'Expiry',          value: optionsSignal.expiry,                                     cls: 'text-gray-400' },
                 ].map(item => (
                   <div key={item.label}
@@ -392,6 +420,8 @@ const OptionsSignals = () => {
               </div>
             </GlassCard>
           )}
+
+          <RiskPanel optionsSignal={optionsSignal} symbol={selected} delay={0.18} />
 
           <HowToUse />
         </div>

@@ -134,6 +134,17 @@ export const getClaudeAnalysis = async (symbol, indicators, formulaSignal, quote
     return { error: 'NO_KEY', message: 'No AI API key found. Add VITE_GEMINI_API_KEY or VITE_GROQ_API_KEY to .env' }
   }
 
+  // No candle history → no real indicators. The model would be forced to invent
+  // a 55–92 "confidence" from a single price, which is pure hallucination. Refuse
+  // to produce a confident directional call on no data — that's the honest answer.
+  const hasIndicators = indicators && (indicators.rsi != null || indicators.macd != null)
+  if (!hasIndicators) {
+    return {
+      error: 'NO_DATA',
+      message: 'No chart history available (market closed or rate limited). The AI needs candle data to analyze — it will not guess a direction from a single price.',
+    }
+  }
+
   const prompt = buildPrompt(symbol, indicators, formulaSignal, quote)
 
   try {

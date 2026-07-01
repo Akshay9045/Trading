@@ -8,18 +8,32 @@ import { generateSignal } from './signalEngine'
 // minCandles= warm-up bars needed before the indicators are valid
 // tieBreak  = when one bar touches BOTH target and stop, which wins:
 //             'stop' (conservative/pessimistic) or 'target' (optimistic)
-export const runBacktest = (candles, { horizon = 10, minCandles = 60, tieBreak = 'stop', signalOpts = {} } = {}) => {
+// costR     = round-trip cost (brokerage + STT + slippage + bid/ask spread)
+//             expressed in units of risk (R). Deducted from EVERY trade. 0.10 means
+//             each trade pays 10% of the amount it was risking. TUNE THIS to your
+//             broker + the option's spread — for weekly options it can be 0.15–0.30.
+export const runBacktest = (candles, { horizon = 10, minCandles = 60, tieBreak = 'stop', costR = 0.10, signalOpts = {} } = {}) => {
   if (!candles || candles.length < minCandles + horizon + 1) return null
 
   const trades = []
 
+  // Decision is made at the CLOSE of bar i (that's the latest data we have).
+  // We can only act on it from the NEXT bar — so we fill at candles[i+1].open,
+  // not candles[i].close. Filling at the signal bar's close is lookahead and
+  // inflates the win rate. The target/stop are the engine's ATR levels; we
+  // recompute R:R from the actual fill so gap-ups/downs are accounted for.
   for (let i = minCandles; i < candles.length - 1; i++) {
     const sig = generateSignal(candles.slice(0, i + 1), signalOpts)
     if (!sig || sig.type === 'HOLD') continue
 
-    const { type, entry, target, stopLoss, confidence, rrRatio } = sig
-    let outcome = 'timeout'
+    const { type, target, stopLoss, confidence } = sig
+    const fill   = candles[i + 1].open
+    const reward = Math.abs(target - fill)
+    const risk   = Math.abs(fill - stopLoss)
+    const rr     = risk > 0 ? parseFloat((reward / risk).toFixed(2)) : 0
+    let outcome  = 'timeout'
 
+    // Scan from the entry bar (i+1) onward — it can hit target/stop intrabar too.
     for (let j = i + 1; j <= i + horizon && j < candles.length; j++) {
       const c = candles[j]
       const hitTarget = type === 'BUY' ? c.high >= target  : c.low  <= target
@@ -29,13 +43,14 @@ export const runBacktest = (candles, { horizon = 10, minCandles = 60, tieBreak =
       if (hitTarget)            { outcome = 'target'; break }
     }
 
-    trades.push({ index: i, type, confidence, entry, target, stopLoss, rr: rrRatio, outcome })
+    trades.push({ index: i, type, confidence, entry: fill, target, stopLoss, rr, outcome })
   }
 
   const summarize = (list) => {
     const decided = list.filter(t => t.outcome !== 'timeout')
     const wins    = decided.filter(t => t.outcome === 'target').length
-    const R       = decided.reduce((s, t) => s + (t.outcome === 'target' ? t.rr : -1), 0)
+    // Cost is paid on every trade: a win nets (rr − costR), a loss nets (−1 − costR).
+    const R       = decided.reduce((s, t) => s + (t.outcome === 'target' ? t.rr - costR : -1 - costR), 0)
     return {
       total:      list.length,
       decided:    decided.length,

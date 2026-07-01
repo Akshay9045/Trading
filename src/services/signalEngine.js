@@ -27,7 +27,7 @@ const SIGNAL_WEIGHTS = {
 export const generateSignal = (candles, opts = {}) => {
   // targetATR/stopATR = ATR multiples for target & stop; trendFilter = only trade with the EMA trend.
   // adxMin = skip trades when ADX (trend strength) is below this (0 = off). Defaults are backtest-validated.
-  const { targetATR = 1, stopATR = 1, trendFilter = true, adxMin = 22, htfFactor = 0 } = opts
+  const { targetATR = 1, stopATR = 1, trendFilter = true, adxMin = 22, htfFactor = 0, alwaysSignal = false } = opts
   if (!candles || candles.length < 50) return null
 
   const closes = candles.map(c => c.close)
@@ -99,25 +99,33 @@ export const generateSignal = (candles, opts = {}) => {
   if (diff > 0.1) signalType = 'BUY'
   else if (diff < -0.1) signalType = 'SELL'
 
-  // Trend filter — only take CALLs in an uptrend and PUTs in a downtrend
-  if (trendFilter && signalType !== 'HOLD') {
-    const uptrend   = price > ema50 && ema20 > ema50
-    const downtrend = price < ema50 && ema20 < ema50
-    if (signalType === 'BUY'  && !uptrend)   signalType = 'HOLD'
-    if (signalType === 'SELL' && !downtrend) signalType = 'HOLD'
+  const uptrend   = price > ema50 && ema20 > ema50
+  const downtrend = price < ema50 && ema20 < ema50
+
+  if (alwaysSignal) {
+    // Never sit out: always take the directional lean, even when weak or counter-trend.
+    // Quality is communicated via `trendAligned` + confidence/backtest grading, not by hiding it.
+    if (signalType === 'HOLD') signalType = diff >= 0 ? 'BUY' : 'SELL'
+  } else {
+    // Trend filter — only take CALLs in an uptrend and PUTs in a downtrend
+    if (trendFilter && signalType !== 'HOLD') {
+      if (signalType === 'BUY'  && !uptrend)   signalType = 'HOLD'
+      if (signalType === 'SELL' && !downtrend) signalType = 'HOLD'
+    }
+    // ADX filter — skip choppy/ranging markets where breakouts fail
+    if (adxMin > 0 && signalType !== 'HOLD' && (adx == null || adx < adxMin)) {
+      signalType = 'HOLD'
+    }
+    // Higher-timeframe confirmation — only trade if the bigger timeframe agrees
+    if (htfFactor > 1 && signalType !== 'HOLD') {
+      const htf = higherTimeframeTrend(candles, htfFactor)
+      if (signalType === 'BUY'  && htf !== 'up')   signalType = 'HOLD'
+      if (signalType === 'SELL' && htf !== 'down') signalType = 'HOLD'
+    }
   }
 
-  // ADX filter — skip choppy/ranging markets where breakouts fail
-  if (adxMin > 0 && signalType !== 'HOLD' && (adx == null || adx < adxMin)) {
-    signalType = 'HOLD'
-  }
-
-  // Higher-timeframe confirmation — only trade if the bigger timeframe agrees
-  if (htfFactor > 1 && signalType !== 'HOLD') {
-    const htf = higherTimeframeTrend(candles, htfFactor)
-    if (signalType === 'BUY'  && htf !== 'up')   signalType = 'HOLD'
-    if (signalType === 'SELL' && htf !== 'down') signalType = 'HOLD'
-  }
+  // Is the chosen direction with the prevailing EMA trend? (used for quality grading)
+  const trendAligned = (signalType === 'BUY' && uptrend) || (signalType === 'SELL' && downtrend)
 
   // Calculate entry, target, stop loss using ATR
   const atrValue = atr || price * 0.005
@@ -147,11 +155,13 @@ export const generateSignal = (candles, opts = {}) => {
     stopLoss,
     confidence,
     rrRatio,
+    trendAligned,
     bullScore: parseFloat((totalBull * 100).toFixed(1)),
     bearScore: parseFloat((totalBear * 100).toFixed(1)),
     neutralScore: parseFloat(((1 - totalBull - totalBear) * 100).toFixed(1)),
     reasons,
     indicators: {
+      adx: adx != null ? parseFloat(adx.toFixed(1)) : null,
       rsi: rsi ? parseFloat(rsi.toFixed(2)) : null,
       macd: macd ? parseFloat(macd.toFixed(2)) : null,
       macdSignal: macdSignal ? parseFloat(macdSignal.toFixed(2)) : null,
@@ -174,13 +184,13 @@ export const getAIPrediction = (signal, quote) => {
   const normalizedBull = Math.floor((bullishPct / total) * 100)
   const normalizedBear = 100 - normalizedBull
 
-  // Fear & Greed (based on RSI + momentum)
-  const rsi = signal.indicators.rsi || 50
-  const fearGreed = Math.floor(rsi * 0.7 + (signal.bullScore - signal.bearScore) * 30 + 50)
-    .toString()
-    .replace(/^(\d+).*/, '$1')
-
-  const fgValue = Math.min(100, Math.max(0, parseInt(fearGreed)))
+  // Fear & Greed — a HEURISTIC proxy derived from RSI (a real momentum oscillator):
+  // low RSI = fear, high RSI = greed, which lines up with the labels below. Nudged
+  // slightly by the net directional bias. This is NOT a real market-wide F&G index.
+  // (The old formula multiplied a 0–100 score by 30, which pinned the value to 100.)
+  const rsi = signal.indicators.rsi ?? 50
+  const bias = (signal.bullScore - signal.bearScore) / 10   // bull/bearScore are 0–100 → small tilt
+  const fgValue = Math.min(100, Math.max(0, Math.round(rsi + bias)))
 
   return {
     bullishProbability: normalizedBull,
@@ -190,6 +200,6 @@ export const getAIPrediction = (signal, quote) => {
     marketSentiment: signal.type === 'BUY' ? 'Bullish' : signal.type === 'SELL' ? 'Bearish' : 'Neutral',
     trendStrength: signal.confidence > 75 ? 'Strong' : signal.confidence > 55 ? 'Moderate' : 'Weak',
     shortTermOutlook: normalizedBull > 60 ? 'Positive' : normalizedBear > 60 ? 'Negative' : 'Sideways',
-    volumeAnalysis: Math.random() > 0.5 ? 'Above Average' : 'Below Average',
+    volumeAnalysis: 'Unavailable',   // indices report no per-candle volume — don't fabricate it with Math.random()
   }
 }
