@@ -9,27 +9,30 @@ import { runBacktest } from '../services/backtestEngine'
 // confidence bucket. `calibrated` is true only when we have enough samples to trust.
 const MIN_BUCKET_SAMPLES = 8
 
-export const calibrateSignal = (signal, candles) => {
+// `signalOpts` MUST match the options used to generate `signal`, so the backtest
+// takes trades in the same way (e.g. always-trade / no trend filter). Otherwise the
+// live signal's direction may have zero backtested trades → a blank "n=0" display.
+export const calibrateSignal = (signal, candles, signalOpts = {}) => {
   if (!signal || signal.type === 'HOLD' || !candles || candles.length < 90) return signal
   let bt
-  try { bt = runBacktest(candles) } catch { return signal }
+  try { bt = runBacktest(candles, { signalOpts }) } catch { return signal }
   if (!bt) return signal
 
-  const dir       = signal.type === 'BUY' ? bt.byDirection.CALL : bt.byDirection.PUT
-  const bucketKey = Math.floor(signal.confidence / 10) * 10
-  const bucket    = bt.buckets[bucketKey]
-  const bSamples  = bucket ? bucket.total : 0
-  const bWinRate  = bSamples >= MIN_BUCKET_SAMPLES ? Math.round((bucket.wins / bucket.total) * 100) : null
+  // Use THIS direction's own backtested trades — consistent numbers, no all-directions
+  // bucket mismatch. `calibrated` is true only when this direction has enough samples.
+  const dir      = signal.type === 'BUY' ? bt.byDirection.CALL : bt.byDirection.PUT
+  const decided  = dir.decided || 0
+  const enough   = decided >= MIN_BUCKET_SAMPLES
 
   return {
     ...signal,
-    signalStrength:  signal.confidence,                                       // keep the raw formula score
-    backtestWinRate: dir.decided ? Math.round(dir.winRate * 100) : null,      // real win rate, this direction
-    backtestSamples: dir.decided || 0,
-    bucketWinRate:   bWinRate,                                                // win rate for this confidence band
-    bucketSamples:   bSamples,
-    expectancy:      dir.decided ? parseFloat(dir.expectancy.toFixed(2)) : null, // avg R per trade, after costs
-    calibrated:      bWinRate != null,
+    signalStrength:  signal.confidence,                                        // keep the raw formula score
+    backtestWinRate: enough ? Math.round(dir.winRate * 100) : null,            // real win rate, this direction
+    backtestSamples: decided,
+    bucketWinRate:   enough ? Math.round(dir.winRate * 100) : null,            // (kept for callers) same source now
+    bucketSamples:   decided,
+    expectancy:      enough ? parseFloat(dir.expectancy.toFixed(2)) : null,    // avg R per trade, after costs
+    calibrated:      enough,
   }
 }
 

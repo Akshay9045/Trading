@@ -514,10 +514,10 @@ const SymbolAnalysis = ({ symbol, autoRun }) => {
   // shown via the grade, not by hiding the trade. Calibrated with the backtest win rate.
   const signal = useMemo(() => {
     if (!candles?.length) return strictSignal
-    return calibrateSignal(
-      generateSignal(candles, { alwaysSignal: true, adxMin: 0, trendFilter: false, targetATR: 1, stopATR: 1 }),
-      candles
-    )
+    // Backtest with the SAME opts used to generate the signal, so the live direction
+    // actually has backtested trades (no more blank n=0).
+    const opts = { alwaysSignal: true, adxMin: 0, trendFilter: false, targetATR: 1, stopATR: 1 }
+    return calibrateSignal(generateSignal(candles, opts), candles, opts)
   }, [candles, strictSignal])
   const { quote: liveQuote }  = useRealtimeQuote(symbol, 5000)
   const quote                 = liveQuote || marketQuote

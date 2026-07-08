@@ -36,7 +36,7 @@ function httpsGet(options) {
       stream.on('error', reject)
     })
     req.on('error', reject)
-    req.setTimeout(10000, () => { req.destroy(); reject(new Error('timeout')) })
+    req.setTimeout(options._timeout || 8000, () => { req.destroy(); reject(new Error('timeout')) })
     req.end()
   })
 }
@@ -180,11 +180,12 @@ async function refreshNSEData() {
 
 async function initNSESession() {
   try {
-    // Hit homepage to get fresh cookies
+    // Hit homepage to get fresh cookies — short timeout on init so server starts fast
     const home = await httpsGet({
       hostname: 'www.nseindia.com',
       path: '/',
       _jar: nseJar,
+      _timeout: 5000,
       headers: {
         'User-Agent': BROWSER_UA,
         'Accept': 'text/html,*/*',
@@ -211,7 +212,7 @@ let yfCrumb = null
 async function initYFSession() {
   try {
     const fc = await httpsGet({
-      hostname: 'fc.yahoo.com', path: '/', _jar: yfJar,
+      hostname: 'fc.yahoo.com', path: '/', _jar: yfJar, _timeout: 5000,
       headers: { 'User-Agent': BROWSER_UA },
     })
     saveCookies(yfJar, fc.headers)
