@@ -4,7 +4,7 @@ import {
   Brain, Cpu, Zap, RefreshCw, AlertCircle, CheckCircle,
   TrendingUp, TrendingDown, Minus, Key, ExternalLink, Loader, Clock
 } from 'lucide-react'
-import { useMarketData, useRealtimeQuote, useOptionChain, calibrateSignal } from '../hooks/useMarketData'
+import { useMarketData, useRealtimeQuote, useOptionChain, useDailyTrend, calibrateSignal } from '../hooks/useMarketData'
 import { getClaudeAnalysis, isAIEnabled, getActiveProvider, PROVIDER_INFO } from '../services/claudeService'
 import { generateSignal } from '../services/signalEngine'
 import { getNextExpiry, getMonthlyExpiry, getATMStrike, getOTMStrike, getITMStrike } from '../services/optionsEngine'
@@ -509,16 +509,20 @@ const SymbolAnalysis = ({ symbol, autoRun }) => {
   // Intraday by default — matches same-day weekly-option trading. '1D' = swing view.
   const [timeframe, setTimeframe] = useState('15m')
   const { signal: strictSignal, candles, quote: marketQuote, loading: dataLoading, error: dataError, refresh } = useMarketData(symbol, timeframe)
+  const dailyTrend = useDailyTrend(symbol)   // higher-timeframe trend for intraday alignment
 
   // Always-trade: the engine always returns a directional pick (never WAIT). Quality is
   // shown via the grade, not by hiding the trade. Calibrated with the backtest win rate.
   const signal = useMemo(() => {
     if (!candles?.length) return strictSignal
+    // On intraday timeframes, follow the Daily trend so 5m/15m stop contradicting it.
+    // On the Daily view itself, there's no higher trend to defer to.
+    const higherTrend = timeframe === '1D' ? null : dailyTrend
     // Backtest with the SAME opts used to generate the signal, so the live direction
     // actually has backtested trades (no more blank n=0).
-    const opts = { alwaysSignal: true, adxMin: 0, trendFilter: false, targetATR: 1, stopATR: 1 }
+    const opts = { alwaysSignal: true, adxMin: 0, trendFilter: false, targetATR: 1, stopATR: 1, higherTrend }
     return calibrateSignal(generateSignal(candles, opts), candles, opts)
-  }, [candles, strictSignal])
+  }, [candles, strictSignal, dailyTrend, timeframe])
   const { quote: liveQuote }  = useRealtimeQuote(symbol, 5000)
   const quote                 = liveQuote || marketQuote
   const chain                 = useOptionChain(symbol, quote?.price)   // live option premiums

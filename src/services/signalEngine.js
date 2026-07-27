@@ -27,7 +27,10 @@ const SIGNAL_WEIGHTS = {
 export const generateSignal = (candles, opts = {}) => {
   // targetATR/stopATR = ATR multiples for target & stop; trendFilter = only trade with the EMA trend.
   // adxMin = skip trades when ADX (trend strength) is below this (0 = off). Defaults are backtest-validated.
-  const { targetATR = 1, stopATR = 1, trendFilter = true, adxMin = 22, htfFactor = 0, alwaysSignal = false } = opts
+  // higherTrend: 'up' | 'down' | 'flat' | null — the trend of a BIGGER timeframe
+  // (e.g. the Daily). When provided in alwaysSignal mode, the intraday direction
+  // defers to it so 5m/15m stop contradicting the Daily (no counter-trend PUTs in an uptrend).
+  const { targetATR = 1, stopATR = 1, trendFilter = true, adxMin = 22, htfFactor = 0, alwaysSignal = false, higherTrend = null } = opts
   if (!candles || candles.length < 50) return null
 
   const closes = candles.map(c => c.close)
@@ -40,13 +43,17 @@ export const generateSignal = (candles, opts = {}) => {
   let bullScore = 0, bearScore = 0
   const reasons = []
 
-  // RSI Analysis
+  // RSI Analysis — MOMENTUM-aligned (trend-following), not mean-reversion.
+  // High RSI = bullish momentum, low RSI = bearish momentum. Only the extremes
+  // (>75 / <25) get reduced weight for overbought/oversold reversal risk. This fixes
+  // the old bug where RSI 55–70 in an uptrend added BEARISH points and fought the
+  // EMA/MACD trend signals.
   if (rsi !== null) {
-    if (rsi < 30) { bullScore += SIGNAL_WEIGHTS.rsi; reasons.push({ text: `RSI oversold (${rsi.toFixed(1)})`, side: 'bull' }) }
-    else if (rsi < 45) { bullScore += SIGNAL_WEIGHTS.rsi * 0.5; reasons.push({ text: `RSI neutral-bullish (${rsi.toFixed(1)})`, side: 'bull' }) }
-    else if (rsi > 70) { bearScore += SIGNAL_WEIGHTS.rsi; reasons.push({ text: `RSI overbought (${rsi.toFixed(1)})`, side: 'bear' }) }
-    else if (rsi > 55) { bearScore += SIGNAL_WEIGHTS.rsi * 0.5; reasons.push({ text: `RSI neutral-bearish (${rsi.toFixed(1)})`, side: 'bear' }) }
-    else { reasons.push({ text: `RSI neutral (${rsi.toFixed(1)})`, side: 'neutral' }) }
+    if (rsi >= 75) { bullScore += SIGNAL_WEIGHTS.rsi * 0.3; reasons.push({ text: `RSI strong but overbought (${rsi.toFixed(1)})`, side: 'bull' }) }
+    else if (rsi >= 55) { bullScore += SIGNAL_WEIGHTS.rsi * 0.7; reasons.push({ text: `RSI bullish momentum (${rsi.toFixed(1)})`, side: 'bull' }) }
+    else if (rsi > 45) { reasons.push({ text: `RSI neutral (${rsi.toFixed(1)})`, side: 'neutral' }) }
+    else if (rsi > 25) { bearScore += SIGNAL_WEIGHTS.rsi * 0.7; reasons.push({ text: `RSI bearish momentum (${rsi.toFixed(1)})`, side: 'bear' }) }
+    else { bearScore += SIGNAL_WEIGHTS.rsi * 0.3; reasons.push({ text: `RSI weak but oversold (${rsi.toFixed(1)})`, side: 'bear' }) }
   }
 
   // MACD Analysis
@@ -104,8 +111,13 @@ export const generateSignal = (candles, opts = {}) => {
 
   if (alwaysSignal) {
     // Never sit out: always take the directional lean, even when weak or counter-trend.
-    // Quality is communicated via `trendAligned` + confidence/backtest grading, not by hiding it.
     if (signalType === 'HOLD') signalType = diff >= 0 ? 'BUY' : 'SELL'
+    // Higher-timeframe alignment: when we know the bigger trend, follow it. This stops
+    // the intraday timeframes (5m/15m) from firing counter-trend signals that contradict
+    // the Daily — e.g. a short-term dip in an uptrend now stays a CALL ("buy the dip").
+    if (higherTrend === 'up')   signalType = 'BUY'
+    else if (higherTrend === 'down') signalType = 'SELL'
+    // higherTrend 'flat' or null → keep the short-term lean
   } else {
     // Trend filter — only take CALLs in an uptrend and PUTs in a downtrend
     if (trendFilter && signalType !== 'HOLD') {
@@ -124,8 +136,12 @@ export const generateSignal = (candles, opts = {}) => {
     }
   }
 
-  // Is the chosen direction with the prevailing EMA trend? (used for quality grading)
-  const trendAligned = (signalType === 'BUY' && uptrend) || (signalType === 'SELL' && downtrend)
+  // Is the chosen direction with the prevailing trend? Used for quality grading.
+  // When a higher-timeframe trend is known, alignment is judged against THAT (the
+  // trade now follows the bigger trend); otherwise against this timeframe's EMAs.
+  const trendAligned = (higherTrend === 'up' || higherTrend === 'down')
+    ? ((signalType === 'BUY' && higherTrend === 'up') || (signalType === 'SELL' && higherTrend === 'down'))
+    : ((signalType === 'BUY' && uptrend) || (signalType === 'SELL' && downtrend))
 
   // Calculate entry, target, stop loss using ATR
   const atrValue = atr || price * 0.005

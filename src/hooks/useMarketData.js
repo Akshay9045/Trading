@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { fetchCandles, fetchQuote, fetchOptionChain } from '../services/apiService'
 import { generateSignal } from '../services/signalEngine'
 import { runBacktest } from '../services/backtestEngine'
+import { calculateEMA } from '../utils/indicators'
 
 // Calibration: replace the engine's arbitrary "confidence" with the REAL win rate
 // measured by backtesting this same signal logic over the loaded candles. We attach
@@ -115,6 +116,32 @@ export const useOptionChain = (symbol, spot, refreshKey = 0) => {
   }, [symbol, refreshKey])   // spot excluded — avoids refetch on every price tick
 
   return chain
+}
+
+// Daily-trend read for higher-timeframe alignment. Fetches 1D candles once and
+// returns 'up' | 'down' | 'flat' from price vs EMA20/EMA50. Intraday signals pass
+// this as `higherTrend` so 5m/15m follow the Daily instead of contradicting it.
+export const useDailyTrend = (symbol) => {
+  const [trend, setTrend] = useState(null)
+
+  useEffect(() => {
+    let active = true
+    fetchCandles(symbol, '1D', 200)
+      .then(candles => {
+        if (!active) return
+        const closes = candles.map(c => c.close)
+        const e20 = calculateEMA(closes, 20)
+        const e50 = calculateEMA(closes, 50)
+        const i   = closes.length - 1
+        const px = closes[i], a = e20[i], b = e50[i]
+        if (a == null || b == null) { setTrend('flat'); return }
+        setTrend(px > b && a > b ? 'up' : px < b && a < b ? 'down' : 'flat')
+      })
+      .catch(() => { if (active) setTrend(null) })
+    return () => { active = false }
+  }, [symbol])
+
+  return trend
 }
 
 export const useRealtimeQuote = (symbol, intervalMs = 5000) => {
