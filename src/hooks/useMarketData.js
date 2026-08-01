@@ -50,9 +50,13 @@ export const useMarketData = (symbol, timeframe = '1D') => {
     setLoading(true)
     setError(null)
 
+    // Pull deeper history on swing timeframes so the backtest has enough trades to be
+    // statistically meaningful (daily/weekly → ~750 bars ≈ 3 yrs; intraday → 400).
+    const outputSize = (timeframe === '1D' || timeframe === '1W') ? 750 : 400
+
     // Fetch candles and quote independently so one failure doesn't block both
     const [candleResult, quoteResult] = await Promise.allSettled([
-      fetchCandles(symbol, timeframe, 200),
+      fetchCandles(symbol, timeframe, outputSize),
       fetchQuote(symbol),
     ])
 

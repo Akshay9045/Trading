@@ -1,9 +1,21 @@
 // Options Signal Engine — generates CALL/PUT recommendations from a base signal
 
+// Strike intervals by symbol. Index values are stable; stock intervals are
+// approximate and set by NSE per-stock — verify against the live option chain.
 const STRIKE_INTERVALS = {
   NIFTY:     50,
   BANKNIFTY: 100,
   SENSEX:    100,
+  // Stocks (app symbols use the .NSE suffix)
+  'RELIANCE.NSE':  20,
+  'TCS.NSE':       20,
+  'HDFCBANK.NSE':  10,
+  'INFY.NSE':      20,
+  'ICICIBANK.NSE': 10,
+  'SBIN.NSE':      5,
+  'BAJFINANCE.NSE':100,
+  'KOTAKBANK.NSE': 20,
+  'LT.NSE':        50,
   DEFAULT:   50,
 }
 

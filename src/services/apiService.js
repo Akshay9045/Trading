@@ -32,7 +32,7 @@ const YF_SYMBOLS = {
 }
 
 const YF_INTERVAL = { '1m':'1m','5m':'5m','15m':'15m','1h':'60m','1D':'1d','1W':'1wk' }
-const YF_RANGE    = { '1m':'1d','5m':'5d','15m':'1mo','1h':'3mo','1D':'1y','1W':'5y'  }
+const YF_RANGE    = { '1m':'1d','5m':'5d','15m':'1mo','1h':'3mo','1D':'5y','1W':'10y'  }
 
 // ── Cache ──────────────────────────────────────────────────────────────────
 const cache = {}

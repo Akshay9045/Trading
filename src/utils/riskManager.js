@@ -5,7 +5,14 @@
 
 // NSE index option lot sizes (contract multiplier). These are revised periodically
 // by SEBI/NSE — VERIFY against the current circular before trading real money.
-export const LOT_SIZES = { NIFTY: 75, BANKNIFTY: 35, SENSEX: 20, DEFAULT: 75 }
+// Contract lot sizes. Indices + a set of liquid F&O stocks. All revised periodically
+// by NSE — VERIFY against the current circular before trading real money.
+export const LOT_SIZES = {
+  NIFTY: 75, BANKNIFTY: 35, SENSEX: 20,
+  'RELIANCE.NSE': 500, 'TCS.NSE': 175, 'HDFCBANK.NSE': 550, 'INFY.NSE': 400,
+  'ICICIBANK.NSE': 700, 'SBIN.NSE': 750, 'BAJFINANCE.NSE': 125, 'KOTAKBANK.NSE': 400, 'LT.NSE': 175,
+  DEFAULT: 75,
+}
 export const getLotSize = (symbol) => LOT_SIZES[symbol] || LOT_SIZES.DEFAULT
 
 // Position sizing for BUYING an option that has a premium stop-loss + target.

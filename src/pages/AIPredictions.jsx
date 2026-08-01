@@ -12,7 +12,10 @@ import GlassCard from '../components/ui/GlassCard'
 import Badge from '../components/ui/Badge'
 import { formatPrice } from '../utils/formatters'
 
-const SYMBOLS = ['NIFTY', 'BANKNIFTY']
+// Indices + a few liquid F&O stocks. Stocks use Yahoo candles for the SIGNAL (works),
+// but have no live Groww option chain — so their premiums are ESTIMATED, and the
+// weekly/monthly expiry shown follows the index (Tuesday) convention, not the stock's.
+const SYMBOLS = ['NIFTY', 'BANKNIFTY', 'RELIANCE.NSE', 'HDFCBANK.NSE', 'ICICIBANK.NSE']
 
 // Always-trade grading: never hide the direction — show BUY CALL / BUY PUT with a
 // quality % and a one-word verdict so the user can judge. Prefers the real backtested
@@ -205,6 +208,17 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, gate = 65,
   const itmStrike  = engDir && engPrice ? getITMStrike(engPrice, symbol, engDir) : null
   const otmStrike  = engDir && engPrice ? getOTMStrike(engPrice, symbol, engDir) : null
 
+  // EXACT recommended entry: if price is extended from EMA9 (chasing risk), recommend
+  // a LIMIT entry at EMA9 (better fill); otherwise MARKET at the live price. Stop/target
+  // are re-anchored to that exact entry so the numbers are consistent and actionable.
+  const atrApprox   = tgtDist || engPrice * 0.004
+  const extended    = e9 != null && (engIsCall ? (dispEntry - e9) > 0.25 * atrApprox : (e9 - dispEntry) > 0.25 * atrApprox)
+  const recEntryType  = extended ? 'LIMIT · buy the pullback' : 'MARKET · enter now'
+  const recEntryPrice = extended && e9 != null ? e9 : dispEntry
+  const recTarget     = engIsCall ? recEntryPrice + tgtDist : recEntryPrice - tgtDist
+  const recStop       = engIsCall ? recEntryPrice - slDist  : recEntryPrice + slDist
+  const recPremium    = atmStrike != null ? legPremium(atmStrike) : null
+
   return (
     <GlassCard
       delay={delay}
@@ -303,18 +317,32 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, gate = 65,
           </div>
         )}
 
-        {/* Ideal pullback-entry zone (EMA9/EMA20) — shown below the live entry */}
-        {hasZone && (
-          <div className="mt-2 flex items-start gap-2 px-3 py-2 rounded-lg bg-primary-500/8 border border-primary-500/20 text-[11px] leading-snug">
-            <span className="text-gray-500 flex-shrink-0 font-semibold">Ideal entry</span>
-            <div className="text-gray-400">
-              <span className="font-mono font-bold text-primary-300">₹{formatPrice(zoneLo)} – ₹{formatPrice(zoneHi)}</span>
-              {' '}on a pullback to EMA9/EMA20 ({engIsCall ? 'support' : 'resistance'}) — a better fill if price dips.
-              Or enter now at <span className="font-mono text-white">₹{formatPrice(dispEntry)}</span> if you don't want to wait.
-              <span className="text-gray-600"> Zone may not be reached in a strong trend.</span>
-            </div>
+        {/* EXACT recommended entry — precise price, type, premium, stop, target */}
+        <div className="mt-3 rounded-xl border border-primary-500/25 bg-primary-500/8 p-3">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] text-primary-300 uppercase tracking-wider font-bold">Recommended Entry</span>
+            <span className={`text-[10px] font-bold ${extended ? 'text-hold' : 'text-bull'}`}>{recEntryType}</span>
           </div>
-        )}
+          <div className="grid grid-cols-4 gap-2 text-center">
+            {[
+              { label: 'Entry',   value: `₹${formatPrice(recEntryPrice)}`, cls: 'text-white' },
+              { label: 'Target',  value: `₹${formatPrice(recTarget)}`,     cls: 'text-bull' },
+              { label: 'Stop',    value: `₹${formatPrice(recStop)}`,       cls: 'text-bear' },
+              { label: 'Premium', value: recPremium != null ? `₹${recPremium}` : '—', cls: engIsCall ? 'text-bull' : 'text-bear' },
+            ].map(b => (
+              <div key={b.label}>
+                <div className="text-[9px] text-gray-600 mb-0.5">{b.label}</div>
+                <div className={`text-sm font-black font-mono ${b.cls}`}>{b.value}</div>
+              </div>
+            ))}
+          </div>
+          <p className="text-[10px] text-gray-500 mt-2 leading-snug">
+            {extended
+              ? `Price is extended from EMA9 — a limit at ₹${formatPrice(recEntryPrice)} gets a better fill, but may miss if it runs. Market entry now would be ₹${formatPrice(dispEntry)}.`
+              : `Price is near EMA9 — entering at market (₹${formatPrice(dispEntry)}) is reasonable.`}
+            {recPremium == null && ' Premium estimated (no live chain for this symbol).'}
+          </p>
+        </div>
 
         {/* Actionable option — driven by the ENGINE (math, ≥65% gate), NOT the LLM */}
         {engDir ? (

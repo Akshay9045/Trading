@@ -95,6 +95,25 @@ export const generateSignal = (candles, opts = {}) => {
   if (momentum > 0.5) { bullScore += SIGNAL_WEIGHTS.momentum * Math.min(1, momentum / 2); reasons.push({ text: `Positive momentum +${momentum.toFixed(2)}%`, side: 'bull' }) }
   else if (momentum < -0.5) { bearScore += SIGNAL_WEIGHTS.momentum * Math.min(1, Math.abs(momentum) / 2); reasons.push({ text: `Negative momentum ${momentum.toFixed(2)}%`, side: 'bear' }) }
 
+  // Volume confirmation — only when real volume exists (NSE indices report 0, so this
+  // is skipped for NIFTY/BANKNIFTY and active for stocks). High volume confirms the
+  // prevailing lean; low volume flags a weak, unconvincing move.
+  const vols = candles.map(c => c.volume || 0)
+  const hasVolume = vols.slice(-20).some(v => v > 0)
+  if (hasVolume) {
+    const recentVol = vols.slice(-3).reduce((a, b) => a + b, 0) / 3
+    const avgVol    = vols.slice(-20).reduce((a, b) => a + b, 0) / 20
+    const volRatio  = avgVol > 0 ? recentVol / avgVol : 1
+    const lean = bullScore >= bearScore ? 'bull' : 'bear'
+    if (volRatio > 1.3) {
+      if (lean === 'bull') bullScore += SIGNAL_WEIGHTS.momentum * 0.3
+      else                 bearScore += SIGNAL_WEIGHTS.momentum * 0.3
+      reasons.push({ text: `High volume (${volRatio.toFixed(1)}× avg) confirms the move`, side: lean })
+    } else if (volRatio < 0.6) {
+      reasons.push({ text: `Low volume (${volRatio.toFixed(1)}× avg) — weak conviction`, side: 'neutral' })
+    }
+  }
+
   // Determine signal
   const totalBull = bullScore
   const totalBear = bearScore

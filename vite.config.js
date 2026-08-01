@@ -71,7 +71,7 @@ const GROWW_SYMBOL = { NIFTY: 'NIFTY', BANKNIFTY: 'BANKNIFTY' }
 
 // Timeframe → Groww candle interval (minutes) and how many days of history to pull
 const GROWW_INTERVAL = { '1m': 1, '5m': 5, '15m': 15, '1h': 60, '1D': 1440, '1W': 1440 }
-const GROWW_DAYS     = { '1m': 3, '5m': 10, '15m': 20, '1h': 60, '1D': 400, '1W': 400 }
+const GROWW_DAYS     = { '1m': 3, '5m': 10, '15m': 20, '1h': 60, '1D': 1500, '1W': 2500 }
 
 function decodeJwtExpMs(token) {
   try {
