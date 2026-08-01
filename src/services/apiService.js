@@ -208,9 +208,10 @@ const normalizeOptionChain = (raw, spot) => {
   const legLtp   = (leg) => pickNum(leg, 'ltp', 'last_price', 'lastPrice', 'close_price', 'close')
   const legIV    = (leg) => pickNum(leg?.greeks, 'iv', 'implied_volatility') ?? pickNum(leg, 'iv', 'implied_volatility', 'impliedVolatility')
   const legDelta = (leg) => pickNum(leg?.greeks, 'delta') ?? pickNum(leg, 'delta')
+  const legOI    = (leg) => pickNum(leg, 'open_interest', 'openInterest', 'oi') ?? 0
   const setLeg   = (strike, call, put) => strikes.set(strike, {
-    callLtp: legLtp(call), callIV: legIV(call), callDelta: legDelta(call),
-    putLtp:  legLtp(put),  putIV:  legIV(put),  putDelta:  legDelta(put),
+    callLtp: legLtp(call), callIV: legIV(call), callDelta: legDelta(call), callOI: legOI(call),
+    putLtp:  legLtp(put),  putIV:  legIV(put),  putDelta:  legDelta(put),  putOI:  legOI(put),
   })
 
   if (raw?.strikes && typeof raw.strikes === 'object' && !Array.isArray(raw.strikes)) {
@@ -250,7 +251,18 @@ const normalizeOptionChain = (raw, spot) => {
     }
   }
 
-  return { strikes, atmIV, count: strikes.size }
+  // Put/Call OI Ratio (PCR) over strikes within ~3% of spot (the liquid, meaningful band).
+  // >1 = more put OI (often support/bullish bias), <1 = more call OI (resistance/bearish bias).
+  let totCallOI = 0, totPutOI = 0
+  const band = useSpot ? useSpot * 0.03 : Infinity
+  for (const [strike, leg] of strikes) {
+    if (Math.abs(strike - (useSpot || strike)) > band) continue
+    totCallOI += leg.callOI || 0
+    totPutOI  += leg.putOI  || 0
+  }
+  const pcr = totCallOI > 0 ? parseFloat((totPutOI / totCallOI).toFixed(2)) : null
+
+  return { strikes, atmIV, pcr, count: strikes.size }
 }
 
 export const fetchOptionChain = (symbol, spot, expiryISO = getNextExpiryISO()) =>

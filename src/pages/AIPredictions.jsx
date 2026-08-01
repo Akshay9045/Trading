@@ -388,6 +388,13 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, gate = 65,
           <AlertCircle size={12} className="text-bear flex-shrink-0 mt-0.5" />
           <p className="text-xs text-gray-400"><span className="text-bear font-semibold">Key Risk: </span>{result.keyRisk}</p>
         </div>
+
+        {result.invalidationLevel && (
+          <div className="mt-2 flex items-start gap-2 px-3 py-2.5 rounded-lg bg-hold/8 border border-hold/15">
+            <Minus size={12} className="text-hold flex-shrink-0 mt-0.5" />
+            <p className="text-xs text-gray-400"><span className="text-hold font-semibold">Invalid if: </span>{result.invalidationLevel}</p>
+          </div>
+        )}
       </div>
 
       {/* Indicator breakdown */}
@@ -546,7 +553,23 @@ const SymbolAnalysis = ({ symbol, autoRun }) => {
     setAiLoading(true)
     setErrorMsg(null)
     const indicators = signal?.indicators || {}
-    const result = await getClaudeAnalysis(symbol, indicators, signal, quote)
+    // Enrich the AI with what a real options trader uses: options flow (PCR/IV),
+    // the daily trend, ADX, the backtested edge, recent price action, and theta.
+    const daysToExpiry = chain?.expiry
+      ? Math.max(1, Math.round((new Date(chain.expiry) - new Date()) / 86400000))
+      : null
+    const context = {
+      dailyTrend,
+      adx:          indicators.adx ?? null,
+      pcr:          chain?.pcr ?? null,
+      atmIV:        chain?.atmIV ?? null,
+      winRate:      signal?.backtestWinRate ?? null,
+      expectancy:   signal?.expectancy ?? null,
+      samples:      signal?.backtestSamples ?? null,
+      recentCloses: candles?.slice(-6).map(c => c.close) ?? null,
+      daysToExpiry,
+    }
+    const result = await getClaudeAnalysis(symbol, indicators, signal, quote, context)
     if (result.error) {
       setErrorMsg(result.message)
     } else {
@@ -554,7 +577,7 @@ const SymbolAnalysis = ({ symbol, autoRun }) => {
       setCallCount(c => c + 1)
     }
     setAiLoading(false)
-  }, [symbol, signal, quote, dataLoading])
+  }, [symbol, signal, quote, dataLoading, chain, dailyTrend, candles])
 
   // Auto-run once when data is ready
   useEffect(() => {
