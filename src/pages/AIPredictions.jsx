@@ -39,6 +39,113 @@ const gradeTrade = (signal) => {
   return { dir, quality, label, tone, winRate, basis: winRate != null ? 'backtested' : 'untested' }
 }
 
+// Build the actionable trade plan: exact entry (MARKET vs LIMIT-pullback), re-anchored
+// target/stop, the ATM strike + live premium, and the grade. Used by the decision summary.
+const buildTradePlan = (signal, livePrice, chain, symbol) => {
+  if (!signal) return null
+  const grade   = gradeTrade(signal)
+  const isCall  = grade.dir === 'CALL'
+  const tgtDist = Math.abs(signal.target - signal.entry)
+  const slDist  = Math.abs(signal.entry - signal.stopLoss)
+  const entryPx = livePrice || signal.entry || 0
+  const e9      = signal.indicators?.ema9
+  const atr     = tgtDist || entryPx * 0.004
+  const extended = e9 != null && (isCall ? (entryPx - e9) > 0.25 * atr : (e9 - entryPx) > 0.25 * atr)
+  const entry   = extended && e9 != null ? e9 : entryPx
+  const atmStrike = entryPx ? getATMStrike(entryPx, symbol) : null
+  const leg     = atmStrike != null ? chain?.strikes?.get?.(atmStrike) : null
+  const ltp     = leg ? (isCall ? leg.callLtp : leg.putLtp) : null
+  return {
+    grade, dir: grade.dir, isCall,
+    tone: grade.tone === 'bear' ? 'gray-500' : grade.tone,   // mute bad grades
+    isBad: grade.tone === 'bear',
+    entryType: extended ? 'LIMIT · buy the pullback' : 'MARKET · enter now',
+    entry,
+    target: isCall ? entry + tgtDist : entry - tgtDist,
+    stop:   isCall ? entry - slDist  : entry + slDist,
+    atmStrike,
+    premium: ltp != null && ltp > 0 ? Math.round(ltp) : null,
+    suffix: isCall ? 'CE' : 'PE',
+  }
+}
+
+// ── Decision Summary — the one-glance verdict at the top of each symbol ─────────
+const trendBadge = (t) => t === 'up'
+  ? 'bg-bull/15 border-bull/30 text-bull'
+  : t === 'down' ? 'bg-bear/15 border-bear/30 text-bear' : 'bg-white/5 border-white/10 text-gray-400'
+
+const DecisionSummary = ({ symbol, signal, quote, chain, dailyTrend, lastUpdated, onRefresh }) => {
+  const plan = buildTradePlan(signal, quote?.price, chain, symbol)
+  const name = symbol.replace('.NSE', '')
+  return (
+    <GlassCard className="p-4">
+      {/* Top row: name, price, daily-trend badge, freshness + refresh */}
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2.5">
+          <span className="text-base font-bold text-white">{name}</span>
+          {quote && (
+            <span className="text-sm font-mono text-gray-300">
+              ₹{formatPrice(quote.price)}
+              <span className={`ml-1 text-xs ${quote.changePercent >= 0 ? 'text-bull' : 'text-bear'}`}>
+                {quote.changePercent >= 0 ? '+' : ''}{quote.changePercent?.toFixed(2)}%
+              </span>
+            </span>
+          )}
+          {dailyTrend && (
+            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${trendBadge(dailyTrend)}`}>
+              Daily {dailyTrend.toUpperCase()}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2 text-[10px] text-gray-600">
+          {lastUpdated && <span className="font-mono">as of {lastUpdated}</span>}
+          <button onClick={onRefresh} className="text-gray-500 hover:text-white transition-colors" title="Refresh data">
+            <RefreshCw size={13} />
+          </button>
+        </div>
+      </div>
+
+      {plan ? (
+        <>
+          {/* Verdict + grade */}
+          <div className="flex items-end justify-between mb-3">
+            <div>
+              {plan.isBad && <div className="text-[10px] font-bold text-bear uppercase tracking-wider mb-0.5">⚠ Skip — low quality</div>}
+              <div className={`text-3xl font-black tracking-wide text-${plan.tone}`}>
+                {plan.isCall ? 'BUY CALL' : 'BUY PUT'}
+              </div>
+              <div className="text-[11px] text-gray-500 mt-0.5">
+                {plan.atmStrike} {plan.suffix} @ {plan.premium != null ? `₹${plan.premium}` : '~est'}
+                <span className="text-gray-700"> · {plan.entryType}</span>
+              </div>
+            </div>
+            <div className="text-right">
+              <div className={`text-3xl font-black font-mono text-${plan.tone}`}>{plan.grade.quality}%</div>
+              <div className={`text-[10px] font-bold text-${plan.tone}`}>{plan.grade.label}</div>
+            </div>
+          </div>
+
+          {/* Exact entry / target / stop */}
+          <div className="grid grid-cols-3 gap-2">
+            {[
+              { label: 'Entry',  value: plan.entry,  cls: 'text-white' },
+              { label: 'Target', value: plan.target, cls: 'text-bull' },
+              { label: 'Stop',   value: plan.stop,   cls: 'text-bear' },
+            ].map(b => (
+              <div key={b.label} className="bg-white/[0.04] rounded-lg p-2 text-center border border-white/[0.05]">
+                <div className="text-[9px] text-gray-600 mb-0.5 uppercase tracking-wide">{b.label}</div>
+                <div className={`text-sm font-black font-mono ${b.cls}`}>₹{formatPrice(b.value)}</div>
+              </div>
+            ))}
+          </div>
+        </>
+      ) : (
+        <div className="text-sm text-gray-500 py-2">Waiting for candle data…</div>
+      )}
+    </GlassCard>
+  )
+}
+
 // ── No-key setup card ─────────────────────────────────────────────────────────
 const SetupCard = () => (
   <GlassCard className="p-6 border-hold/20" delay={0}>
@@ -161,6 +268,7 @@ const ErrorCard = ({ error }) => (
 
 // ── Main Claude result card ───────────────────────────────────────────────────
 const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, gate = 65, delay = 0 }) => {
+  const [showDetails, setShowDetails] = useState(false)
   if (!result || result.error) return null
 
   const aiName        = PROVIDER_INFO[result.provider]?.name || 'AI'
@@ -422,6 +530,15 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, gate = 65,
         )}
       </div>
 
+      {/* Details toggle — declutter: indicator breakdown + agreement hidden by default */}
+      <button
+        onClick={() => setShowDetails(s => !s)}
+        className="w-full px-5 py-2.5 flex items-center justify-center gap-1.5 text-[11px] text-gray-500 hover:text-gray-300 border-b border-white/[0.06] transition-colors"
+      >
+        {showDetails ? 'Hide details ▴' : 'Show details (indicators, agreement) ▾'}
+      </button>
+
+      {showDetails && (<>
       {/* Indicator breakdown */}
       <div className="p-5 border-b border-white/[0.06]">
         <div className="text-[10px] text-gray-600 uppercase tracking-wider font-semibold mb-3">
@@ -463,6 +580,7 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, gate = 65,
           {result.agreesWithFormula ? '✓ Both Agree' : '⚡ AI Overrides Formula'}
         </Badge>
       </div>
+      </>)}
     </GlassCard>
   )
 }
@@ -562,6 +680,12 @@ const SymbolAnalysis = ({ symbol, autoRun }) => {
   const [aiLoading, setAiLoading] = useState(false)
   const [errorMsg, setErrorMsg]  = useState(null)
   const [callCount, setCallCount] = useState(0)
+  const [lastUpdated, setLastUpdated] = useState(null)
+
+  // Freshness stamp — set whenever candles reload (data no longer auto-polls)
+  useEffect(() => {
+    if (candles?.length) setLastUpdated(new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }))
+  }, [candles])
 
   const TF_OPTIONS = [
     { id: '5m',  label: 'Intraday 5m'  },
@@ -613,20 +737,22 @@ const SymbolAnalysis = ({ symbol, autoRun }) => {
 
   return (
     <div className="space-y-3">
-      {/* Header row */}
+      {/* Decision summary — the one-glance verdict + exact entry/target/stop */}
+      <DecisionSummary
+        symbol={symbol}
+        signal={signal}
+        quote={quote}
+        chain={chain}
+        dailyTrend={dailyTrend}
+        lastUpdated={lastUpdated}
+        onRefresh={refresh}
+      />
+
+      {/* Controls row — timeframe + analyze */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-bold text-white">{symbol}</span>
-          {quote && (
-            <span className="text-sm font-mono text-gray-400">
-              ₹{formatPrice(quote.price)}
-              <span className={`ml-1 text-xs ${quote.changePercent >= 0 ? 'text-bull' : 'text-bear'}`}>
-                {quote.changePercent >= 0 ? '+' : ''}{quote.changePercent?.toFixed(2)}%
-              </span>
-            </span>
-          )}
           {callCount > 0 && (
-            <span className="text-[10px] text-gray-600 font-mono">{callCount} call{callCount > 1 ? 's' : ''}</span>
+            <span className="text-[10px] text-gray-600 font-mono">{callCount} AI call{callCount > 1 ? 's' : ''}</span>
           )}
         </div>
         <div className="flex items-center gap-2">
