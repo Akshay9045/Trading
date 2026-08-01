@@ -12,10 +12,7 @@ import GlassCard from '../components/ui/GlassCard'
 import Badge from '../components/ui/Badge'
 import { formatPrice } from '../utils/formatters'
 
-// Indices + a few liquid F&O stocks. Stocks use Yahoo candles for the SIGNAL (works),
-// but have no live Groww option chain — so their premiums are ESTIMATED, and the
-// weekly/monthly expiry shown follows the index (Tuesday) convention, not the stock's.
-const SYMBOLS = ['NIFTY', 'BANKNIFTY', 'RELIANCE.NSE', 'HDFCBANK.NSE', 'ICICIBANK.NSE']
+const SYMBOLS = ['NIFTY', 'BANKNIFTY']
 
 // Always-trade grading: never hide the direction — show BUY CALL / BUY PUT with a
 // quality % and a one-word verdict so the user can judge. Prefers the real backtested
