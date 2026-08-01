@@ -55,6 +55,15 @@ const buildTradePlan = (signal, livePrice, chain, symbol) => {
   const atmStrike = entryPx ? getATMStrike(entryPx, symbol) : null
   const leg     = atmStrike != null ? chain?.strikes?.get?.(atmStrike) : null
   const ltp     = leg ? (isCall ? leg.callLtp : leg.putLtp) : null
+  const premium = ltp != null && ltp > 0 ? Math.round(ltp) : null
+
+  // Project the OPTION premium at target/stop from the spot move via delta.
+  // premium ≈ entryPremium ± delta × spot-move. Real delta from the chain, else ~0.5 (ATM).
+  const rawDelta = leg ? (isCall ? leg.callDelta : leg.putDelta) : null
+  const delta    = rawDelta != null && Math.abs(rawDelta) > 0 ? Math.abs(rawDelta) : 0.5
+  const premiumTarget = premium != null ? Math.max(premium + 1, Math.round(premium + delta * tgtDist)) : null
+  const premiumStop   = premium != null ? Math.max(1, Math.round(premium - delta * slDist)) : null
+
   return {
     grade, dir: grade.dir, isCall,
     tone: grade.tone === 'bear' ? 'gray-500' : grade.tone,   // mute bad grades
@@ -64,7 +73,7 @@ const buildTradePlan = (signal, livePrice, chain, symbol) => {
     target: isCall ? entry + tgtDist : entry - tgtDist,
     stop:   isCall ? entry - slDist  : entry + slDist,
     atmStrike,
-    premium: ltp != null && ltp > 0 ? Math.round(ltp) : null,
+    premium, premiumTarget, premiumStop,
     suffix: isCall ? 'CE' : 'PE',
   }
 }
@@ -115,7 +124,7 @@ const DecisionSummary = ({ symbol, signal, quote, chain, dailyTrend, lastUpdated
                 {plan.isCall ? 'BUY CALL' : 'BUY PUT'}
               </div>
               <div className="text-[11px] text-gray-500 mt-0.5">
-                {plan.atmStrike} {plan.suffix} @ {plan.premium != null ? `₹${plan.premium}` : '~est'}
+                {plan.atmStrike} {plan.suffix}
                 <span className="text-gray-700"> · {plan.entryType}</span>
               </div>
             </div>
@@ -125,19 +134,43 @@ const DecisionSummary = ({ symbol, signal, quote, chain, dailyTrend, lastUpdated
             </div>
           </div>
 
-          {/* Exact entry / target / stop */}
-          <div className="grid grid-cols-3 gap-2">
-            {[
-              { label: 'Entry',  value: plan.entry,  cls: 'text-white' },
-              { label: 'Target', value: plan.target, cls: 'text-bull' },
-              { label: 'Stop',   value: plan.stop,   cls: 'text-bear' },
-            ].map(b => (
-              <div key={b.label} className="bg-white/[0.04] rounded-lg p-2 text-center border border-white/[0.05]">
-                <div className="text-[9px] text-gray-600 mb-0.5 uppercase tracking-wide">{b.label}</div>
-                <div className={`text-sm font-black font-mono ${b.cls}`}>₹{formatPrice(b.value)}</div>
+          {/* OPTION premium levels — what you actually buy/sell the option at */}
+          {plan.premium != null ? (
+            <>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { label: `Buy ${plan.suffix} at`, value: plan.premium,       cls: 'text-white' },
+                  { label: 'Target (book)',         value: plan.premiumTarget,  cls: 'text-bull' },
+                  { label: 'Stop-loss (exit)',      value: plan.premiumStop,    cls: 'text-bear' },
+                ].map(b => (
+                  <div key={b.label} className="bg-white/[0.04] rounded-lg p-2 text-center border border-white/[0.05]">
+                    <div className="text-[9px] text-gray-600 mb-0.5 uppercase tracking-wide">{b.label}</div>
+                    <div className={`text-base font-black font-mono ${b.cls}`}>₹{b.value}</div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+              <div className="text-[10px] text-gray-600 mt-2 text-center font-mono">
+                Underlying: entry ₹{formatPrice(plan.entry)} · target ₹{formatPrice(plan.target)} · SL ₹{formatPrice(plan.stop)}
+              </div>
+            </>
+          ) : (
+            /* No live premium (estimated / chain unavailable) — show spot levels */
+            <>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { label: 'Entry',  value: plan.entry,  cls: 'text-white' },
+                  { label: 'Target', value: plan.target, cls: 'text-bull' },
+                  { label: 'Stop',   value: plan.stop,   cls: 'text-bear' },
+                ].map(b => (
+                  <div key={b.label} className="bg-white/[0.04] rounded-lg p-2 text-center border border-white/[0.05]">
+                    <div className="text-[9px] text-gray-600 mb-0.5 uppercase tracking-wide">{b.label} (spot)</div>
+                    <div className={`text-sm font-black font-mono ${b.cls}`}>₹{formatPrice(b.value)}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="text-[10px] text-gray-600 mt-2 text-center">Option premium levels unavailable (no live chain) — showing underlying levels.</div>
+            </>
+          )}
         </>
       ) : (
         <div className="text-sm text-gray-500 py-2">Waiting for candle data…</div>
