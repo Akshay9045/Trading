@@ -1,5 +1,7 @@
 // Options Signal Engine — generates CALL/PUT recommendations from a base signal
 
+import { tradeApi } from './tradeApi'
+
 const STRIKE_INTERVALS = {
   NIFTY:     50,
   BANKNIFTY: 100,
@@ -79,9 +81,12 @@ const rollBackToTradingDay = (date) => {
   return date
 }
 
-const getNextExpiryDate = () => {
+// Calculated fallback — used only when Groww's instrument list can't be reached.
+// NIFTY: next weekly Tuesday. BANKNIFTY: monthly only (last Tuesday).
+const calcNextExpiryDate = (symbol) => {
   const today = new Date()
   today.setHours(0, 0, 0, 0)
+  if (symbol === 'BANKNIFTY') return calcMonthlyExpiryDate()
   const baseOffset = (TUESDAY - today.getDay() + 7) % 7   // days to upcoming Tuesday (0 if today)
   // Find the first Tuesday-based expiry that lands today or later (after holiday roll-back)
   for (let week = 0; week < 8; week++) {
@@ -93,25 +98,6 @@ const getNextExpiryDate = () => {
   return rollBackToTradingDay(new Date(today.getTime() + baseOffset * 86400000))
 }
 
-export const getNextExpiry = () =>
-  getNextExpiryDate().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
-
-// ISO date (YYYY-MM-DD) of the next weekly expiry — for Groww option-chain API calls
-export const getNextExpiryISO = () => {
-  const d  = getNextExpiryDate()
-  const y  = d.getFullYear()
-  const m  = String(d.getMonth() + 1).padStart(2, '0')
-  const dd = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${dd}`
-}
-
-const getDaysToNextExpiry = () => {
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const expiry = getNextExpiryDate()
-  return Math.max(1, Math.round((expiry - today) / 86400000))
-}
-
 // Last Tuesday of the given month (year, month 0-indexed), rolled back if a holiday
 const lastTuesdayOfMonth = (year, month) => {
   const d = new Date(year, month + 1, 0)   // last calendar day of the month
@@ -119,7 +105,7 @@ const lastTuesdayOfMonth = (year, month) => {
   return rollBackToTradingDay(d)
 }
 
-export const getMonthlyExpiry = () => {
+const calcMonthlyExpiryDate = () => {
   const today = new Date()
   today.setHours(0, 0, 0, 0)
   let expiry = lastTuesdayOfMonth(today.getFullYear(), today.getMonth())
@@ -128,7 +114,104 @@ export const getMonthlyExpiry = () => {
     const year  = nextMonth > 11 ? today.getFullYear() + 1 : today.getFullYear()
     expiry = lastTuesdayOfMonth(year, nextMonth % 12)
   }
-  return expiry.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+  return expiry
+}
+
+// ── Real expiries from Groww's instrument list (server/instruments.js) ───────
+// NSE moves expiries for holidays and BANKNIFTY is monthly-only, so the listed
+// dates are the source of truth. Loaded once per symbol, shared by every caller.
+const EXPIRY_UNDERLYINGS = ['NIFTY', 'BANKNIFTY']
+const RETRY_AFTER_MS = 60_000
+const realExpiries = {}       // symbol → ['YYYY-MM-DD', ...] sorted
+const pendingExpiries = {}    // symbol → Promise
+const failedAt = {}           // symbol → ms timestamp of last failed load
+const expiryListeners = new Set()
+
+const isoToDate = (iso) => {
+  const [y, m, d] = iso.split('-').map(Number)
+  return new Date(y, m - 1, d)
+}
+
+const upcomingRealExpiries = (symbol) => {
+  const list = realExpiries[symbol]
+  if (!list) return null
+  const today = localDateKey(new Date())
+  const upcoming = list.filter(e => e >= today)
+  return upcoming.length ? upcoming : null
+}
+
+// Fetch the listed expiries for `symbol`. Resolves to the list, or null when the
+// server is unreachable (callers then use the calculated fallback).
+export const loadExpiries = (symbol) => {
+  if (!EXPIRY_UNDERLYINGS.includes(symbol)) return Promise.resolve(null)
+  if (upcomingRealExpiries(symbol)) return Promise.resolve(upcomingRealExpiries(symbol))
+  if (pendingExpiries[symbol]) return pendingExpiries[symbol]
+  if (failedAt[symbol] && Date.now() - failedAt[symbol] < RETRY_AFTER_MS) return Promise.resolve(null)
+
+  pendingExpiries[symbol] = tradeApi.expiries(symbol)
+    .then(({ expiries }) => {
+      if (!Array.isArray(expiries) || !expiries.length) throw new Error('no upcoming expiries listed')
+      realExpiries[symbol] = [...expiries].sort()
+      delete failedAt[symbol]
+      expiryListeners.forEach(fn => fn())
+      return upcomingRealExpiries(symbol)
+    })
+    .catch(err => {
+      failedAt[symbol] = Date.now()
+      console.warn(`[optionsEngine] ${symbol} expiries unavailable, using calculated dates:`, err.message)
+      return null
+    })
+    .finally(() => { delete pendingExpiries[symbol] })
+  return pendingExpiries[symbol]
+}
+
+// Subscribe to "real expiries arrived" — returns an unsubscribe function.
+export const subscribeExpiries = (fn) => {
+  expiryListeners.add(fn)
+  return () => expiryListeners.delete(fn)
+}
+
+// 'groww' when the dates come from the instrument list, else 'calculated'
+export const getExpirySource = (symbol) => upcomingRealExpiries(symbol) ? 'groww' : 'calculated'
+
+const getNextExpiryDate = (symbol = 'NIFTY') => {
+  const real = upcomingRealExpiries(symbol)
+  if (real) return isoToDate(real[0])
+  loadExpiries(symbol)   // fire-and-forget; subscribers re-render when it lands
+  return calcNextExpiryDate(symbol)
+}
+
+const formatExpiry = (d) =>
+  d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+
+export const getNextExpiry = (symbol = 'NIFTY') => formatExpiry(getNextExpiryDate(symbol))
+
+// ISO date (YYYY-MM-DD) of the next expiry — for Groww option-chain API calls
+export const getNextExpiryISO = (symbol = 'NIFTY') => localDateKey(getNextExpiryDate(symbol))
+
+// Like getNextExpiryISO, but waits for the instrument list first so API calls
+// never go to a calculated (possibly non-existent) expiry when the real one is available.
+export const resolveNextExpiryISO = async (symbol = 'NIFTY') => {
+  await loadExpiries(symbol)
+  return getNextExpiryISO(symbol)
+}
+
+const getDaysToNextExpiry = (symbol) => {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const expiry = getNextExpiryDate(symbol)
+  return Math.max(1, Math.round((expiry - today) / 86400000))
+}
+
+// Monthly expiry = the last listed expiry of the first month that still has one
+export const getMonthlyExpiry = (symbol = 'NIFTY') => {
+  const real = upcomingRealExpiries(symbol)
+  if (real) {
+    const month = real[0].slice(0, 7)
+    return formatExpiry(isoToDate(real.filter(e => e.startsWith(month)).pop()))
+  }
+  loadExpiries(symbol)
+  return formatExpiry(calcMonthlyExpiryDate())
 }
 
 // VIX-based Black-Scholes approximation for option premium
@@ -190,7 +273,7 @@ export const buildOptionsSignal = (baseSignal, symbol, quote, optionChain = null
   const atm           = getATMStrike(entry, symbol)
   const itmStrike     = getITMStrike(entry, symbol, optionType)
   const otmStrike     = getOTMStrike(entry, symbol, optionType)
-  const daysToExpiry  = getDaysToNextExpiry()
+  const daysToExpiry  = getDaysToNextExpiry(symbol)
 
   // Prefer the live chain's ATM implied volatility; fall back to quote VIX.
   const vix           = optionChain?.atmIV ?? quote?.vix ?? 14.61
@@ -231,8 +314,10 @@ export const buildOptionsSignal = (baseSignal, symbol, quote, optionChain = null
     action:         type === 'BUY' ? 'BUY CALL' : 'BUY PUT',
     optionType,
     symbol,
-    expiry:         getNextExpiry(),
-    monthlyExpiry:  getMonthlyExpiry(),
+    expiry:         getNextExpiry(symbol),
+    expiryISO:      getNextExpiryISO(symbol),
+    expirySource:   getExpirySource(symbol),
+    monthlyExpiry:  getMonthlyExpiry(symbol),
 
     // Underlying levels
     spotEntry:      entry,

@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { getNextExpiryISO } from './optionsEngine'
+import { resolveNextExpiryISO } from './optionsEngine'
 
 // ── Symbol maps ────────────────────────────────────────────────────────────
 
@@ -253,8 +253,11 @@ const normalizeOptionChain = (raw, spot) => {
   return { strikes, atmIV, count: strikes.size }
 }
 
-export const fetchOptionChain = (symbol, spot, expiryISO = getNextExpiryISO()) =>
-  cached(`chain:${symbol}:${expiryISO}`, 30_000, async () => {
+// Expiry defaults to the next one listed in Groww's instrument list (calculated
+// only if that list is unreachable) — BANKNIFTY has monthly expiries only.
+export const fetchOptionChain = async (symbol, spot, expiryISO) => {
+  if (!expiryISO) expiryISO = await resolveNextExpiryISO(symbol)
+  return cached(`chain:${symbol}:${expiryISO}`, 30_000, async () => {
     const { data } = await axios.get('/api/groww/option-chain', {
       params: { symbol, expiry: expiryISO }, timeout: 12000,
     })
@@ -263,6 +266,7 @@ export const fetchOptionChain = (symbol, spot, expiryISO = getNextExpiryISO()) =
     if (!chain.count) throw new Error('Option chain returned no parseable strikes')
     return { ...chain, expiry: expiryISO }
   })
+}
 
 export const fetchMultipleQuotes = (symbols) =>
   Promise.allSettled(symbols.map(s => fetchQuote(s))).then(results =>

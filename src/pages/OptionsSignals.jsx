@@ -4,8 +4,8 @@ import {
   TrendingUp, TrendingDown, RefreshCw, Clock, Info,
   Zap, ChevronRight, AlertCircle, ArrowUp, ArrowDown, Wifi
 } from 'lucide-react'
-import { useMarketData, useRealtimeQuote, useOptionChain } from '../hooks/useMarketData'
-import { buildOptionsSignal, getNextExpiry } from '../services/optionsEngine'
+import { useMarketData, useRealtimeQuote, useOptionChain, useExpiries } from '../hooks/useMarketData'
+import { buildOptionsSignal } from '../services/optionsEngine'
 import OptionsSignalCard from '../components/options/OptionsSignalCard'
 import { useTrading } from '../context/TradingContext'
 import { ticketFromSignal } from '../components/trade/SignalWatcher'
@@ -154,6 +154,7 @@ const CompactCard = ({ symbol, delay }) => {
   const { quote }  = useRealtimeQuote(symbol, 5000)
   const { signal } = useMarketData(symbol, '1D')
   const chain      = useOptionChain(symbol, quote?.price)
+  useExpiries(symbol)   // re-render when Groww's real expiry dates arrive
   const opts = buildOptionsSignal(signal, symbol, quote, chain)
 
   if (!opts) return null
@@ -251,13 +252,13 @@ const HowToUse = () => (
     </div>
     <ol className="space-y-2.5 text-xs text-gray-400">
       {[
-        'Open Zerodha / Upstox / Angel — go to F&O section',
-        'Search NIFTY or BANKNIFTY options chain',
-        'Pick the expiry date shown on the card (weekly Thursday)',
-        'Buy ATM strike CE (CALL) or PE (PUT) at the shown premium',
-        'Place stop loss at the premium SL price immediately after entry',
-        'Exit when premium hits target OR spot reaches target level',
-        'Never hold to expiry — exit with at least 30 min remaining',
+        'Wait for a BUY CALL / BUY PUT signal — WAIT means no trade',
+        'Click "Review & place order" on the signal card to open the order ticket',
+        'Check the strike and expiry in the ticket — NIFTY expires weekly, BANKNIFTY monthly (dates from Groww)',
+        'Check the mode first: paper is simulated, LIVE sends a real order to Groww',
+        'Set lots, stop loss and target — the ticket blocks orders over your risk limits',
+        'Place the order — the stop-loss + target (OCO) goes in automatically once the buy fills',
+        'Track and exit positions on the Trade page; never hold to expiry',
       ].map((step, i) => (
         <li key={i} className="flex items-start gap-2.5">
           <span className="w-5 h-5 rounded-full bg-primary-500/15 text-primary-400 flex items-center justify-center flex-shrink-0 text-[10px] font-bold mt-0.5">
@@ -280,6 +281,7 @@ const OptionsSignals = () => {
   const { signal, loading, refresh } = useMarketData(selected, '1D')
   const { quote: liveQuote }         = useRealtimeQuote(selected, 5000)   // live 5s
   const optionChain                  = useOptionChain(selected, liveQuote?.price, refreshKey)
+  const expiry                       = useExpiries(selected)   // real dates from Groww's instrument list
   const { openTicket, mode }         = useTrading()
 
   // Manual refresh: reload candles AND re-pull the option chain on click
@@ -347,8 +349,13 @@ const OptionsSignals = () => {
           {/* Right: expiry + signal badge */}
           <div className="flex flex-col items-end gap-2">
             <div className="text-right">
-              <div className="text-[10px] text-gray-600 uppercase tracking-wide">Weekly Expiry</div>
-              <div className="text-sm font-mono font-bold text-gray-300">{getNextExpiry()}</div>
+              <div className="text-[10px] text-gray-600 uppercase tracking-wide">
+                Next Expiry · {selected === 'BANKNIFTY' ? 'Monthly' : 'Weekly'}
+              </div>
+              <div className="text-sm font-mono font-bold text-gray-300"
+                title={expiry.source === 'groww' ? "From Groww's instrument list" : 'Calculated — Groww instrument list unavailable'}>
+                {expiry.next}{expiry.source !== 'groww' && <span className="text-[10px] text-hold font-normal ml-1">(est.)</span>}
+              </div>
             </div>
             {optionsSignal && optionsSignal.action !== 'WAIT' && (
               <Badge

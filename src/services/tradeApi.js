@@ -17,6 +17,7 @@ const call = (p) => p.then(r => r.data).catch(err => {
 export const tradeApi = {
   status:           ()          => call(http.get('/status')),
   setMode:          (mode, confirm) => call(http.post('/mode', { mode, confirm })),
+  expiries:         (underlying) => call(http.get('/expiries', { params: { underlying } })),
   contract:         (params)    => call(http.get('/contract', { params })),
   book:             ()          => call(http.get('/book')),
   placeOrder:       (order)     => call(http.post('/order', order)),

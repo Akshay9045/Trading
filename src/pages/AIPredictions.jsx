@@ -4,10 +4,10 @@ import {
   Brain, Cpu, Zap, RefreshCw, AlertCircle, CheckCircle,
   TrendingUp, TrendingDown, Minus, Key, ExternalLink, Loader, Clock
 } from 'lucide-react'
-import { useMarketData, useRealtimeQuote, useOptionChain, useDailyTrend, calibrateSignal } from '../hooks/useMarketData'
+import { useMarketData, useRealtimeQuote, useOptionChain, useDailyTrend, useExpiries, calibrateSignal } from '../hooks/useMarketData'
 import { getClaudeAnalysis, isAIEnabled, getActiveProvider, PROVIDER_INFO } from '../services/claudeService'
 import { generateSignal } from '../services/signalEngine'
-import { getNextExpiry, getMonthlyExpiry, getATMStrike, getOTMStrike, getITMStrike } from '../services/optionsEngine'
+import { getATMStrike, getOTMStrike, getITMStrike } from '../services/optionsEngine'
 import GlassCard from '../components/ui/GlassCard'
 import Badge from '../components/ui/Badge'
 import { formatPrice } from '../utils/formatters'
@@ -161,6 +161,7 @@ const ErrorCard = ({ error }) => (
 
 // ── Main Claude result card ───────────────────────────────────────────────────
 const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, gate = 65, delay = 0 }) => {
+  const { next: weeklyExpiry, monthly: monthlyExpiry } = useExpiries(symbol)   // real dates from Groww
   if (!result || result.error) return null
 
   const aiName        = PROVIDER_INFO[result.provider]?.name || 'AI'
@@ -168,8 +169,6 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, gate = 65,
   const isPut         = result.optionType === 'PUT'
   const color         = isCall ? 'bull' : isPut ? 'bear' : 'hold'
   const Icon          = isCall ? TrendingUp : isPut ? TrendingDown : Minus
-  const weeklyExpiry  = getNextExpiry()
-  const monthlyExpiry = getMonthlyExpiry()
 
   // The actionable option follows the ENGINE (math, ≥65% gate) — NOT the LLM's guess
   const grade      = gradeTrade(signal)
@@ -254,7 +253,7 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, gate = 65,
           <div className="flex items-center gap-2 ml-1">
             <span className={`text-[11px] font-bold font-mono px-2 py-0.5 rounded-full border
               bg-${color}/15 border-${color}/30 text-${color}`}>
-              Weekly · {weeklyExpiry}
+              {symbol === 'BANKNIFTY' ? 'Next' : 'Weekly'} · {weeklyExpiry}
             </span>
             <span className="text-[10px] text-gray-600 font-mono">
               Monthly · {monthlyExpiry}

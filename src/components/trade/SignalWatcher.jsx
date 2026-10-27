@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import toast from 'react-hot-toast'
-import { useMarketData, useRealtimeQuote } from '../../hooks/useMarketData'
+import { useMarketData, useRealtimeQuote, useExpiries } from '../../hooks/useMarketData'
 import { buildOptionsSignal } from '../../services/optionsEngine'
 import { useTrading } from '../../context/TradingContext'
 
@@ -68,6 +68,7 @@ const Watch = ({ symbol, enabled }) => {
     return () => clearInterval(id)
   }, [refresh])
 
+  useExpiries(symbol)   // re-render when Groww's real expiry dates arrive
   const opts = buildOptionsSignal(signal, symbol, quote)
   const key = opts && opts.action !== 'WAIT' ? `${symbol}|${opts.action}|${opts.atmStrike}` : null
 

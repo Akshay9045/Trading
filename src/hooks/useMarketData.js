@@ -3,6 +3,7 @@ import { fetchCandles, fetchQuote, fetchOptionChain } from '../services/apiServi
 import { generateSignal } from '../services/signalEngine'
 import { runBacktest } from '../services/backtestEngine'
 import { calculateEMA } from '../utils/indicators'
+import { loadExpiries, subscribeExpiries, getNextExpiry, getMonthlyExpiry, getExpirySource } from '../services/optionsEngine'
 
 // Calibration: replace the engine's arbitrary "confidence" with the REAL win rate
 // measured by backtesting this same signal logic over the loaded candles. We attach
@@ -116,6 +117,25 @@ export const useOptionChain = (symbol, spot, refreshKey = 0) => {
   }, [symbol, refreshKey])   // spot excluded — avoids refetch on every price tick
 
   return chain
+}
+
+// Next/monthly expiry for a symbol from Groww's instrument list. Re-renders the
+// caller once the real dates arrive; until then (or if the server is down) the
+// values are calculated and `source` is 'calculated'.
+export const useExpiries = (symbol) => {
+  const [, setVersion] = useState(0)
+
+  useEffect(() => {
+    const unsubscribe = subscribeExpiries(() => setVersion(v => v + 1))
+    loadExpiries(symbol)
+    return unsubscribe
+  }, [symbol])
+
+  return {
+    next:    getNextExpiry(symbol),
+    monthly: getMonthlyExpiry(symbol),
+    source:  getExpirySource(symbol),
+  }
 }
 
 // Daily-trend read for higher-timeframe alignment. Fetches 1D candles once and
