@@ -1,6 +1,8 @@
 import { motion } from 'framer-motion'
 import { Menu, RefreshCw, Sun, Moon, Bell, Search, TrendingUp, TrendingDown } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { useApp } from '../../context/AppContext'
+import { useTrading } from '../../context/TradingContext'
 import { formatPrice, formatPercent } from '../../utils/formatters'
 import AnimatedCounter from '../ui/AnimatedCounter'
 
@@ -20,6 +22,24 @@ const TickerItem = ({ symbol, data }) => {
         {formatPercent(data.changePercent)}
       </span>
     </span>
+  )
+}
+
+// Always-visible reminder of where orders go. Click → Trade page.
+const ModeBadge = () => {
+  const { mode, status } = useTrading()
+  const navigate = useNavigate()
+  const live = mode === 'live'
+  return (
+    <button onClick={() => navigate('/trade')}
+      title={status?.auth?.ok ? 'Groww connected' : `Groww not connected${status?.auth?.error ? `: ${status.auth.error}` : ''}`}
+      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-mono font-bold ${live
+        ? 'bg-bear/20 border-bear/50 text-bear'
+        : 'bg-hold/10 border-hold/30 text-hold'}`}>
+      <span className={`w-1.5 h-1.5 rounded-full ${live ? 'bg-bear animate-pulse' : 'bg-hold'}`} />
+      {live ? 'LIVE' : 'PAPER'}
+      <span className={`w-1.5 h-1.5 rounded-full ${status?.auth?.ok ? 'bg-bull' : 'bg-gray-600'}`} />
+    </button>
   )
 }
 
@@ -59,6 +79,8 @@ const Navbar = ({ onMenuClick }) => {
               DEMO
             </span>
           )}
+
+          <ModeBadge />
 
           <button
             onClick={refreshMarketData}

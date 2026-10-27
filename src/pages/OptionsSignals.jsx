@@ -7,6 +7,8 @@ import {
 import { useMarketData, useRealtimeQuote, useOptionChain } from '../hooks/useMarketData'
 import { buildOptionsSignal, getNextExpiry } from '../services/optionsEngine'
 import OptionsSignalCard from '../components/options/OptionsSignalCard'
+import { useTrading } from '../context/TradingContext'
+import { ticketFromSignal } from '../components/trade/SignalWatcher'
 import RiskPanel from '../components/options/RiskPanel'
 import GlassCard from '../components/ui/GlassCard'
 import Badge from '../components/ui/Badge'
@@ -278,6 +280,7 @@ const OptionsSignals = () => {
   const { signal, loading, refresh } = useMarketData(selected, '1D')
   const { quote: liveQuote }         = useRealtimeQuote(selected, 5000)   // live 5s
   const optionChain                  = useOptionChain(selected, liveQuote?.price, refreshKey)
+  const { openTicket, mode }         = useTrading()
 
   // Manual refresh: reload candles AND re-pull the option chain on click
   const handleRefresh = () => { refresh(); setRefreshKey(k => k + 1) }
@@ -418,6 +421,11 @@ const OptionsSignals = () => {
                   </div>
                 ))}
               </div>
+              <button onClick={() => openTicket(ticketFromSignal(optionsSignal))}
+                className={`mt-4 w-full py-2.5 rounded-xl font-bold text-sm transition-all ${optionsSignal.optionType === 'CALL'
+                  ? 'bg-bull text-dark-400 hover:bg-bull/90' : 'bg-bear text-white hover:bg-bear/90'}`}>
+                Review &amp; place order {mode === 'live' ? '(LIVE)' : '(paper)'}
+              </button>
             </GlassCard>
           )}
 

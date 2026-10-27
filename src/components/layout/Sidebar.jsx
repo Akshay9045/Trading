@@ -2,7 +2,7 @@ import { NavLink } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   LayoutDashboard, BarChart2, Activity, Zap, Brain, TrendingUp,
-  Eye, ChevronRight, X, Wifi, Layers
+  Eye, ChevronRight, X, Wifi, Layers, ShoppingCart
 } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 
@@ -12,6 +12,7 @@ const NAV_ITEMS = [
   { path: '/indicators', icon: Activity, label: 'Indicators', desc: 'Technical analysis' },
   { path: '/signals', icon: Zap, label: 'Signals', desc: 'Trade signals' },
   { path: '/options', icon: Layers, label: 'Options Signals', desc: 'CALL / PUT signals', highlight: true },
+  { path: '/trade', icon: ShoppingCart, label: 'Trade', desc: 'Orders · positions · P&L' },
   { path: '/ai', icon: Brain, label: 'AI Predictions', desc: 'ML insights' },
   { path: '/sentiment', icon: TrendingUp, label: 'Sentiment', desc: 'Market mood' },
   { path: '/watchlist', icon: Eye, label: 'Watchlist', desc: 'Track stocks' },

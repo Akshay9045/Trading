@@ -3,9 +3,10 @@
 // once you've lost your daily budget. None of this predicts the market — it just
 // keeps a bad streak from blowing up the account.
 
-// NSE index option lot sizes (contract multiplier). These are revised periodically
-// by SEBI/NSE — VERIFY against the current circular before trading real money.
-export const LOT_SIZES = { NIFTY: 75, BANKNIFTY: 35, SENSEX: 20, DEFAULT: 75 }
+// NSE index option lot sizes (contract multiplier), per Groww's instrument list (Oct 2026).
+// Revised periodically by SEBI/NSE — the order ticket reads the live value from Groww,
+// these are only the sizing defaults.
+export const LOT_SIZES = { NIFTY: 65, BANKNIFTY: 30, SENSEX: 20, DEFAULT: 65 }
 export const getLotSize = (symbol) => LOT_SIZES[symbol] || LOT_SIZES.DEFAULT
 
 // Position sizing for BUYING an option that has a premium stop-loss + target.
