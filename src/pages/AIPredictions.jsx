@@ -210,9 +210,11 @@ const ClaudeResultCard = ({ result, symbol, livePrice, vix, signal, chain, gate 
   }) : null
   const optLive    = optLevels?.source === 'live'   // never show the estimate as a buy price
   // The LLM's own index target, converted to a premium with the same delta. No value
-  // when it sits on the losing side of the engine's direction (the two disagree).
+  // when the LLM says WAIT or picks the other direction, or when the target is more
+  // than 2 ATR away (a guess the data can't support).
   const aiPoints   = result.targetZone > 0 && engPrice ? (engIsCall ? result.targetZone - engPrice : engPrice - result.targetZone) : 0
-  const aiOptTarget = optLevels && aiPoints > 0 ? Math.round(optLevels.premium + optLevels.delta * aiPoints) : null
+  const aiMaxPoints = signal?.indicators?.atr ? 2 * signal.indicators.atr : Infinity
+  const aiOptTarget = optLevels && result.optionType === engDir && aiPoints > 0 && aiPoints <= aiMaxPoints ? Math.round(optLevels.premium + optLevels.delta * aiPoints) : null
 
   return (
     <GlassCard
@@ -308,7 +310,7 @@ const ClaudeResultCard = ({ result, symbol, livePrice, vix, signal, chain, gate 
                     { label: 'Buy',    value: optLevels.premium,       cls: 'text-white' },
                     { label: 'Target', value: optLevels.premiumTarget, cls: 'text-bull' },
                     { label: 'Stop Loss', value: optLevels.premiumSL,  cls: 'text-bear' },
-                    { label: 'AI Target', value: aiOptTarget,          cls: 'text-primary-300', note: 'AI guess · unvalidated' },
+                    { label: 'AI Target', value: aiOptTarget,          cls: 'text-primary-300', note: aiOptTarget != null ? 'AI guess · unvalidated' : 'AI has no target' },
                   ].map(l => (
                     <div key={l.label} className="rounded-xl py-2.5 text-center bg-white/[0.05] border border-white/10">
                       <div className="text-[10px] text-gray-500 uppercase tracking-wide mb-0.5">{l.label}</div>
@@ -581,7 +583,7 @@ const SymbolAnalysis = ({ symbol, autoRun }) => {
     setAiLoading(true)
     setErrorMsg(null)
     const indicators = signal?.indicators || {}
-    const result = await getClaudeAnalysis(symbol, indicators, signal, quote)
+    const result = await getClaudeAnalysis(symbol, indicators, signal, quote, timeframe)
     if (result.error) {
       setErrorMsg(result.message)
     } else {
@@ -589,7 +591,7 @@ const SymbolAnalysis = ({ symbol, autoRun }) => {
       setCallCount(c => c + 1)
     }
     setAiLoading(false)
-  }, [symbol, signal, quote, dataLoading])
+  }, [symbol, signal, quote, dataLoading, timeframe])
 
   // Auto-run once when data is ready
   useEffect(() => {

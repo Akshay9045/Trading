@@ -22,8 +22,8 @@ export const PROVIDER_INFO = {
 }
 
 // ── Shared prompt ─────────────────────────────────────────────────────────────
-const buildPrompt = (symbol, indicators, formulaSignal, quote) => {
-  const { rsi, macd, macdSignal, ema9, ema20, ema50, bbUpper, bbLower } = indicators || {}
+const buildPrompt = (symbol, indicators, formulaSignal, quote, timeframe) => {
+  const { rsi, macd, macdSignal, ema9, ema20, ema50, bbUpper, bbLower, atr } = indicators || {}
   const price         = quote?.price         || formulaSignal?.entry || 0
   const changePercent = quote?.changePercent || 0
   const open          = quote?.open  || price
@@ -34,7 +34,7 @@ const buildPrompt = (symbol, indicators, formulaSignal, quote) => {
 
   return `You are a professional NIFTY options trader. Analyze this ${symbol} data and return ONLY valid JSON — no markdown, no text outside the JSON object.
 
-MARKET DATA (${symbol}):
+MARKET DATA (${symbol}, ${timeframe === '1D' ? 'daily' : timeframe} candles):
 - Price: ₹${price.toFixed(2)} (${changePercent >= 0 ? '+' : ''}${changePercent.toFixed(2)}% today)
 - Open: ₹${open.toFixed(2)} | High: ₹${high.toFixed(2)} | Low: ₹${low.toFixed(2)}
 ${hasIndicators ? `- RSI(14): ${rsi?.toFixed(2) ?? 'N/A'}
@@ -42,7 +42,10 @@ ${hasIndicators ? `- RSI(14): ${rsi?.toFixed(2) ?? 'N/A'}
 - EMA9: ${ema9?.toFixed(2) ?? 'N/A'} | EMA20: ${ema20?.toFixed(2) ?? 'N/A'} | EMA50: ${ema50?.toFixed(2) ?? 'N/A'}
 - Bollinger Upper: ${bbUpper?.toFixed(2) ?? 'N/A'} | Lower: ${bbLower?.toFixed(2) ?? 'N/A'}
 - Price vs EMA20: ${ema20 ? (price > ema20 ? 'ABOVE' : 'BELOW') : 'N/A'}
-- Formula signal: ${formulaSignal?.type ?? 'NONE'} (confidence: ${formulaSignal?.confidence ?? 0}%)` : `- Technical indicators: NOT AVAILABLE (use price action and today's OHLC only)
+- ATR(14): ${atr?.toFixed(2) ?? 'N/A'} (average move per candle on this timeframe)
+- Formula signal: ${formulaSignal?.type ?? 'NONE'} (confidence: ${formulaSignal?.confidence ?? 0}%)
+- Formula target: ₹${formulaSignal?.target ?? 'N/A'} | stop: ₹${formulaSignal?.stopLoss ?? 'N/A'}
+- Backtest of this setup: ${formulaSignal?.calibrated ? `${formulaSignal.backtestWinRate}% win rate, ${formulaSignal.expectancy} R/trade over ${formulaSignal.backtestSamples} trades` : 'not available'}` : `- Technical indicators: NOT AVAILABLE (use price action and today's OHLC only)
 - Formula signal: NONE`}
 
 Based on the above data, assess the trade and return ONLY this JSON (replace ALL placeholder values with your actual analysis — do NOT copy placeholder text):
@@ -52,7 +55,8 @@ Rules:
 - signal: exactly "BUY", "SELL", or "HOLD"
 - optionType: exactly "CALL", "PUT", or "WAIT"
 - confidence: integer between 55 and 92 — YOUR honest assessment, not a placeholder
-- entryZone/targetZone/stopLoss: realistic price levels near ₹${Math.round(price)}
+- entryZone/targetZone/stopLoss: index price levels near ₹${Math.round(price)}. ${atr ? `targetZone must be between ₹${(0.5 * atr).toFixed(0)} and ₹${(2 * atr).toFixed(0)} away from Price (0.5 to 2 ATR), on the profit side of your signal` : 'Keep them close to Price'}
+- Base every level only on the data above, such as the EMAs and Bollinger Bands. If the evidence is mixed, return signal "HOLD" and optionType "WAIT" rather than guessing
 - agreesWithFormula: true or false (boolean)
 - sentiment: exactly "Bullish", "Bearish", or "Neutral"
 - trendStrength: exactly "Strong", "Moderate", or "Weak"`
@@ -64,7 +68,7 @@ const callGemini = async (prompt) => {
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`,
     {
       contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.2, maxOutputTokens: 600 },
+      generationConfig: { temperature: 0, maxOutputTokens: 600 },
     },
     { timeout: 15000 }
   )
@@ -80,7 +84,7 @@ const callGroq = async (prompt) => {
       messages: [{ role: 'user', content: prompt }],
       max_tokens: 2000,   // reasoning model — its thinking counts against this limit
       reasoning_effort: 'low',
-      temperature: 0.2,
+      temperature: 0,
     },
     {
       headers: {
@@ -129,7 +133,7 @@ const parseResponse = (raw) => {
 }
 
 // ── Main export ────────────────────────────────────────────────────────────
-export const getClaudeAnalysis = async (symbol, indicators, formulaSignal, quote) => {
+export const getClaudeAnalysis = async (symbol, indicators, formulaSignal, quote, timeframe = '1D') => {
   const provider = getActiveProvider()
   if (!provider) {
     return { error: 'NO_KEY', message: 'No AI API key found. Add VITE_GEMINI_API_KEY or VITE_GROQ_API_KEY to .env' }
@@ -146,7 +150,7 @@ export const getClaudeAnalysis = async (symbol, indicators, formulaSignal, quote
     }
   }
 
-  const prompt = buildPrompt(symbol, indicators, formulaSignal, quote)
+  const prompt = buildPrompt(symbol, indicators, formulaSignal, quote, timeframe)
 
   try {
     let raw = ''
