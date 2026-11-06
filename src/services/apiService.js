@@ -134,6 +134,15 @@ const fetchYFCandles = async (symbol, timeframe, outputSize) => {
   return candles
 }
 
+// ── NSE — daily index candles (last resort; daily only, up to the last close) ──
+const fetchNSEDailyCandles = async (symbol, outputSize) => {
+  const { data } = await axios.get('/api/nse-history', { params: { symbol }, timeout: 30000 })
+  if (data.error) throw new Error(data.error)
+  const candles = (data.candles || []).slice(-outputSize)
+  if (candles.length < 5) throw new Error('Not enough NSE candles')
+  return candles
+}
+
 // ── Public API ─────────────────────────────────────────────────────────────
 
 export const fetchQuote = (symbol) =>
@@ -181,7 +190,13 @@ export const fetchCandles = (symbol, timeframe = '1D', outputSize = 200) =>
         console.warn(`[apiService] Groww candles failed for ${symbol}, falling back to Yahoo:`, err.message)
       }
     }
-    return fetchYFCandles(symbol, timeframe, outputSize)
+    try {
+      return await fetchYFCandles(symbol, timeframe, outputSize)
+    } catch (err) {
+      if (timeframe !== '1D' || !GROWW_SYMBOLS[symbol]) throw err
+      console.warn(`[apiService] Yahoo candles failed for ${symbol}, falling back to NSE:`, err.message)
+      return fetchNSEDailyCandles(symbol, outputSize)
+    }
   })
 
 // ── Groww — option chain (real per-strike premiums + IV) ───────────────────

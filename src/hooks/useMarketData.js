@@ -44,10 +44,10 @@ export const useMarketData = (symbol, timeframe = '1D') => {
   const [signal, setSignal] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const abortRef = useRef(null)
+  const latestLoad = useRef(0)   // a slower earlier load must not overwrite a newer one
 
   const load = useCallback(async () => {
-    if (abortRef.current) abortRef.current = false
+    const loadId = ++latestLoad.current
     setLoading(true)
     setError(null)
 
@@ -57,7 +57,7 @@ export const useMarketData = (symbol, timeframe = '1D') => {
       fetchQuote(symbol),
     ])
 
-    if (abortRef.current) return
+    if (loadId !== latestLoad.current) return
 
     if (quoteResult.status === 'fulfilled') {
       setQuote(quoteResult.value)
@@ -67,6 +67,9 @@ export const useMarketData = (symbol, timeframe = '1D') => {
       setCandles(candleResult.value)
       setSignal(calibrateSignal(generateSignal(candleResult.value), candleResult.value))
     } else {
+      // Drop the previous load's candles: they may be a different timeframe or symbol
+      setCandles([])
+      setSignal(null)
       // Only show error if quote also failed — candle failure alone is non-fatal
       if (quoteResult.status === 'rejected') {
         setError(quoteResult.reason?.message || 'Failed to load market data')
@@ -83,9 +86,8 @@ export const useMarketData = (symbol, timeframe = '1D') => {
   // is what kept re-poking Groww's token endpoint during a rate-limit cooldown.
   // Use the returned `refresh` (the manual button) to pull fresh data on demand.
   useEffect(() => {
-    abortRef.current = false
     load()
-    return () => { abortRef.current = true }
+    return () => { latestLoad.current++ }
   }, [load])
 
   return { candles, quote, signal, loading, error, refresh: load }

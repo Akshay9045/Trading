@@ -18,7 +18,7 @@ const chainCache = new Map()   // `${underlying}|${expiry}` → { ts, rows: Map<
 let growwDataBlockedUntil = 0
 export const priceSource = { last: null, growwError: null }
 
-function get(path, referer) {
+export function nseGet(path, referer) {
   const cookie = Object.entries(jar).map(([k, v]) => `${k}=${v}`).join('; ')
   return new Promise((resolve, reject) => {
     const req = https.get({
@@ -47,10 +47,10 @@ const nseExpiry = (iso) => { const [y, m, d] = iso.split('-'); return `${d}-${MO
 async function fetchChain(underlying, expiry) {
   const path = `/api/option-chain-v3?type=Indices&symbol=${underlying}&expiry=${nseExpiry(expiry)}`
   const referer = 'https://www.nseindia.com/option-chain'
-  let r = await get(path, referer)
+  let r = await nseGet(path, referer)
   if (r.status === 401 || r.status === 403) {   // cookies expired — refresh from the option-chain page
-    await get('/option-chain', 'https://www.nseindia.com/').catch(() => {})
-    r = await get(path, referer)
+    await nseGet('/option-chain', 'https://www.nseindia.com/').catch(() => {})
+    r = await nseGet(path, referer)
   }
   if (r.status !== 200) throw new Error(`NSE option chain HTTP ${r.status}`)
   const rows = new Map()

@@ -548,6 +548,16 @@ const SymbolAnalysis = ({ symbol, autoRun }) => {
   const { signal: strictSignal, candles, quote: marketQuote, loading: dataLoading, error: dataError, refresh } = useMarketData(symbol, timeframe)
   const dailyTrend = useDailyTrend(symbol)   // higher-timeframe trend for intraday alignment
 
+  // Intraday candles only come from Groww/Yahoo. When both refuse, drop to Daily (NSE
+  // has that for free) and say so, rather than leaving the page with no analysis.
+  const [intradayMissing, setIntradayMissing] = useState(false)
+  useEffect(() => {
+    if (timeframe !== '1D' && !dataLoading && !candles?.length) {
+      setIntradayMissing(true)
+      setTimeframe('1D')
+    }
+  }, [timeframe, dataLoading, candles])
+
   // Always-trade: the engine always returns a directional pick (never WAIT). Quality is
   // shown via the grade, not by hiding the trade. Calibrated with the backtest win rate.
   const signal = useMemo(() => {
@@ -661,11 +671,18 @@ const SymbolAnalysis = ({ symbol, autoRun }) => {
         </div>
       )}
 
+      {intradayMissing && timeframe === '1D' && (
+        <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-hold/8 border border-hold/20 text-xs text-hold">
+          <AlertCircle size={12} />
+          <span>Intraday candles unavailable (Groww needs its live-data plan, Yahoo is rate-limiting) — showing the Daily view, up to the last close.</span>
+        </div>
+      )}
+
       {/* Soft warning — candles unavailable but quote works */}
       {!signal && quote && !dataLoading && (
         <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-hold/8 border border-hold/20 text-xs text-hold">
           <AlertCircle size={12} />
-          <span>Chart history unavailable (Yahoo Finance rate limit) — AI analysis runs on live price only. Technical indicators will be N/A.</span>
+          <span>Chart history unavailable (Groww, Yahoo and NSE all refused) — AI analysis runs on live price only. Technical indicators will be N/A.</span>
         </div>
       )}
 

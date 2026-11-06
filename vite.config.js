@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react'
 import https from 'https'
 import zlib from 'zlib'
 import { configureGroww, growwGet } from './server/groww.js'
+import { nseDailyCandles } from './server/nseHistory.js'
 import { configureTrading, tradingMiddleware, startTrading } from './server/trading.js'
 
 const BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
@@ -175,6 +176,20 @@ const marketPlugin = {
         }))
       } catch (e) {
         res.statusCode = 503
+        res.end(JSON.stringify({ error: e.message }))
+      }
+    })
+
+    // ── NSE: daily index candles (fallback when Groww and Yahoo refuse) ────
+    server.middlewares.use('/api/nse-history', async (req, res) => {
+      res.setHeader('Content-Type', 'application/json')
+      res.setHeader('Cache-Control', 'no-cache')
+      try {
+        const url    = new URL(req.originalUrl, 'http://localhost')
+        const symbol = (url.searchParams.get('symbol') || 'NIFTY').toUpperCase()
+        res.end(JSON.stringify({ symbol, candles: await nseDailyCandles(symbol) }))
+      } catch (e) {
+        res.statusCode = 502
         res.end(JSON.stringify({ error: e.message }))
       }
     })
