@@ -17,7 +17,7 @@ export const isAIEnabled = () => !!getActiveProvider()
 
 export const PROVIDER_INFO = {
   gemini:    { name: 'Google Gemini Flash', model: 'gemini-2.0-flash', color: 'text-blue-400',   free: '1,500/day free' },
-  groq:      { name: 'Groq (Llama 3.3 70B)', model: 'llama-3.3-70b-versatile', color: 'text-orange-400', free: '6,000/day free' },
+  groq:      { name: 'Groq (GPT-OSS 120B)', model: 'openai/gpt-oss-120b', color: 'text-orange-400', free: '6,000/day free' },
   anthropic: { name: 'Claude Haiku',        model: 'claude-haiku-4-5-20251001', color: 'text-primary-400', free: 'Paid ($5 min)' },
 }
 
@@ -76,9 +76,10 @@ const callGroq = async (prompt) => {
   const { data } = await axios.post(
     'https://api.groq.com/openai/v1/chat/completions',
     {
-      model: 'llama-3.3-70b-versatile',
+      model: PROVIDER_INFO.groq.model,
       messages: [{ role: 'user', content: prompt }],
-      max_tokens: 600,
+      max_tokens: 2000,   // reasoning model — its thinking counts against this limit
+      reasoning_effort: 'low',
       temperature: 0.2,
     },
     {

@@ -69,7 +69,7 @@ const SetupCard = () => (
           color: 'border-blue-500/20 bg-blue-500/5',
         },
         {
-          name: 'Groq (Llama 3 — 70B)',
+          name: 'Groq (GPT-OSS 120B)',
           tag: 'FREE',
           tagColor: 'bg-orange-500/15 text-orange-400 border-orange-500/25',
           limit: '6,000 calls/day · 30/min',
