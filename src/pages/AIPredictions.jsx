@@ -280,50 +280,9 @@ const ClaudeResultCard = ({ result, symbol, livePrice, vix, signal, chain, gate 
 
       {/* Price levels — from the ENGINE (ATR-based, precise), not the LLM's round guesses */}
       <div className="p-5 border-b border-white/[0.06]">
-        <div className="text-[10px] text-gray-600 uppercase tracking-wider mb-2">
-          Levels <span className="text-gray-700">· anchored to live price · ATR-based target/stop</span>
-        </div>
-        <div className="grid grid-cols-3 gap-3">
-          {[
-            { label: 'Entry (≈ live)', value: dispEntry,  cls: 'text-white' },
-            { label: 'Target',         value: dispTarget, cls: 'text-bull' },
-            { label: 'Stop Loss',      value: dispStop,   cls: 'text-bear' },
-          ].map(item => (
-            <div key={item.label}
-              className="bg-white/[0.04] rounded-xl p-3 text-center border border-white/[0.05]">
-              <div className="text-[10px] text-gray-600 mb-1">{item.label}</div>
-              <div className={`text-base font-black font-mono ${item.cls}`}>
-                ₹{item.value ? formatPrice(item.value) : '--'}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Live price vs the price when the signal formed (last candle close) */}
-        {livePrice && signal?.entry && (
-          <div className="mt-3 flex items-center justify-between px-3 py-2 rounded-lg bg-white/[0.03] border border-white/[0.04] text-xs font-mono">
-            <span className="text-gray-600">Live Rate</span>
-            <span className="text-white font-bold">₹{formatPrice(livePrice)}</span>
-            <span className="text-gray-400">signal formed at ₹{formatPrice(signal.entry)}</span>
-          </div>
-        )}
-
-        {/* Ideal pullback-entry zone (EMA9/EMA20) — shown below the live entry */}
-        {hasZone && (
-          <div className="mt-2 flex items-start gap-2 px-3 py-2 rounded-lg bg-primary-500/8 border border-primary-500/20 text-[11px] leading-snug">
-            <span className="text-gray-500 flex-shrink-0 font-semibold">Ideal entry</span>
-            <div className="text-gray-400">
-              <span className="font-mono font-bold text-primary-300">₹{formatPrice(zoneLo)} – ₹{formatPrice(zoneHi)}</span>
-              {' '}on a pullback to EMA9/EMA20 ({engIsCall ? 'support' : 'resistance'}) — a better fill if price dips.
-              Or enter now at <span className="font-mono text-white">₹{formatPrice(dispEntry)}</span> if you don't want to wait.
-              <span className="text-gray-600"> Zone may not be reached in a strong trend.</span>
-            </div>
-          </div>
-        )}
-
         {/* Actionable option — driven by the ENGINE (math, ≥65% gate), NOT the LLM */}
         {engDir ? (
-          <div className={`mt-3 rounded-xl border p-3
+          <div className={`mb-4 rounded-xl border p-3
             ${engIsCall ? 'bg-bull/10 border-bull/30' : 'bg-bear/10 border-bear/30'}`}>
             <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1 flex items-center gap-1.5">
               Buy This Option
@@ -340,15 +299,15 @@ const ClaudeResultCard = ({ result, symbol, livePrice, vix, signal, chain, gate 
             )}
             {optLive && (
               <>
-                <div className="grid grid-cols-3 gap-2 mt-2">
+                <div className="grid grid-cols-3 gap-2 mt-3">
                   {[
                     { label: 'Buy',    value: optLevels.premium,       cls: 'text-white' },
                     { label: 'Target', value: optLevels.premiumTarget, cls: 'text-bull' },
-                    { label: 'Stop',   value: optLevels.premiumSL,     cls: 'text-bear' },
+                    { label: 'Stop Loss', value: optLevels.premiumSL,  cls: 'text-bear' },
                   ].map(l => (
-                    <div key={l.label} className="rounded-lg py-1.5 text-center bg-white/[0.04] border border-white/10">
-                      <div className="text-[9px] text-gray-600 uppercase tracking-wide">{l.label}</div>
-                      <div className={`text-sm font-bold font-mono ${l.cls}`}>₹{l.value}</div>
+                    <div key={l.label} className="rounded-xl py-2.5 text-center bg-white/[0.05] border border-white/10">
+                      <div className="text-[10px] text-gray-500 uppercase tracking-wide mb-0.5">{l.label}</div>
+                      <div className={`text-xl font-black font-mono ${l.cls}`}>₹{l.value}</div>
                     </div>
                   ))}
                 </div>
@@ -401,6 +360,47 @@ const ClaudeResultCard = ({ result, symbol, livePrice, vix, signal, chain, gate 
             )}
           </div>
         ) : null}
+        <div className="text-[10px] text-gray-600 uppercase tracking-wider mb-2">
+          Index levels <span className="text-gray-700">· anchored to live price · ATR-based target/stop</span>
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          {[
+            { label: 'Entry (≈ live)', value: dispEntry,  cls: 'text-white' },
+            { label: 'Target',         value: dispTarget, cls: 'text-bull' },
+            { label: 'Stop Loss',      value: dispStop,   cls: 'text-bear' },
+          ].map(item => (
+            <div key={item.label}
+              className="bg-white/[0.04] rounded-xl p-3 text-center border border-white/[0.05]">
+              <div className="text-[10px] text-gray-600 mb-1">{item.label}</div>
+              <div className={`text-base font-black font-mono ${item.cls}`}>
+                ₹{item.value ? formatPrice(item.value) : '--'}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Live price vs the price when the signal formed (last candle close) */}
+        {livePrice && signal?.entry && (
+          <div className="mt-3 flex items-center justify-between px-3 py-2 rounded-lg bg-white/[0.03] border border-white/[0.04] text-xs font-mono">
+            <span className="text-gray-600">Live Rate</span>
+            <span className="text-white font-bold">₹{formatPrice(livePrice)}</span>
+            <span className="text-gray-400">signal formed at ₹{formatPrice(signal.entry)}</span>
+          </div>
+        )}
+
+        {/* Ideal pullback-entry zone (EMA9/EMA20) — shown below the live entry */}
+        {hasZone && (
+          <div className="mt-2 flex items-start gap-2 px-3 py-2 rounded-lg bg-primary-500/8 border border-primary-500/20 text-[11px] leading-snug">
+            <span className="text-gray-500 flex-shrink-0 font-semibold">Ideal entry</span>
+            <div className="text-gray-400">
+              <span className="font-mono font-bold text-primary-300">₹{formatPrice(zoneLo)} – ₹{formatPrice(zoneHi)}</span>
+              {' '}on a pullback to EMA9/EMA20 ({engIsCall ? 'support' : 'resistance'}) — a better fill if price dips.
+              Or enter now at <span className="font-mono text-white">₹{formatPrice(dispEntry)}</span> if you don't want to wait.
+              <span className="text-gray-600"> Zone may not be reached in a strong trend.</span>
+            </div>
+          </div>
+        )}
+
       </div>
 
       {/* Claude's reasoning */}

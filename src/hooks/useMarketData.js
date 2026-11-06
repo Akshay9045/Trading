@@ -97,8 +97,9 @@ export const useMarketData = (symbol, timeframe = '1D') => {
 // back to estimated premiums).
 // `refreshKey` (optional) — pass a value that changes when the user clicks refresh
 // to re-pull the chain on demand. `pollMs` (optional) keeps the premiums current;
-// after a failure it waits CHAIN_RETRY_MS, to avoid hammering Groww's token endpoint.
-const CHAIN_RETRY_MS = 5 * 60_000
+// after a failure it waits CHAIN_RETRY_MS. The server pauses logins on its own, so
+// this retry can't hammer Groww's token endpoint.
+const CHAIN_RETRY_MS = 60_000
 export const useOptionChain = (symbol, spot, refreshKey = 0, pollMs = 0) => {
   const [chain, setChain] = useState(null)
   const spotRef = useRef(spot)
