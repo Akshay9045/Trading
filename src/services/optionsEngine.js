@@ -229,6 +229,30 @@ const estimatePremium = (price, strike, daysToExpiry, type, vix = 10.2) => {
   return Math.max(5, Math.round(intrinsic + timeValue))
 }
 
+// Option target/SL from the underlying's move: premium ± delta × spot points.
+const premiumExits = (premium, rawDelta, pointsTarget, pointsSL) => {
+  const delta = rawDelta != null ? Math.abs(rawDelta) : 0.5
+  return {
+    delta,
+    deltaBasis:    rawDelta != null ? 'chain-delta' : 'approx-delta-0.5',
+    premiumTarget: Math.max(premium + 1, Math.round(premium + delta * pointsTarget)),
+    premiumSL:     Math.max(1,           Math.round(premium - delta * pointsSL)),
+  }
+}
+
+// Buy / target / stop premiums for one strike. Uses the chain's LTP and delta when
+// available (source 'live'), else the synthetic estimate (source 'estimated').
+export const getOptionPriceLevels = ({ symbol, spot, strike, optionType, pointsTarget, pointsSL, optionChain = null, vix }) => {
+  const leg      = optionChain?.strikes?.get?.(strike)
+  const ltp      = leg ? (optionType === 'CALL' ? leg.callLtp : leg.putLtp) : null
+  const rawDelta = leg ? (optionType === 'CALL' ? leg.callDelta : leg.putDelta) : null
+  const isLive   = ltp != null && ltp > 0
+  const premium  = isLive
+    ? Math.round(ltp)
+    : estimatePremium(spot, strike, getDaysToNextExpiry(symbol), optionType, optionChain?.atmIV ?? vix ?? 14.61)
+  return { premium, source: isLive ? 'live' : 'estimated', ...premiumExits(premium, rawDelta, pointsTarget, pointsSL) }
+}
+
 // Professional conviction gate — backtested: only setups ≥65% confidence are net-positive.
 // Below this, a pro waits rather than overtrade mediocre signals.
 const MIN_CONVICTION = 65
@@ -305,10 +329,7 @@ export const buildOptionsSignal = (baseSignal, symbol, quote, optionChain = null
   // else ~0.5 for an ATM option. premium ≈ atmPremium ± delta × spot-move.
   const atmLeg     = optionChain?.strikes?.get?.(atm)
   const rawDelta   = atmLeg ? (optionType === 'CALL' ? atmLeg.callDelta : atmLeg.putDelta) : null
-  const delta      = rawDelta != null ? Math.abs(rawDelta) : 0.5
-  const deltaBasis = rawDelta != null ? 'chain-delta' : 'approx-delta-0.5'
-  const premiumTarget = Math.max(atmPremium + 1, Math.round(atmPremium + delta * pointsTarget))
-  const premiumSL     = Math.max(1,              Math.round(atmPremium - delta * pointsSL))
+  const { delta, deltaBasis, premiumTarget, premiumSL } = premiumExits(atmPremium, rawDelta, pointsTarget, pointsSL)
 
   return {
     action:         type === 'BUY' ? 'BUY CALL' : 'BUY PUT',

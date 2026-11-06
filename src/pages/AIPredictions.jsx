@@ -7,7 +7,7 @@ import {
 import { useMarketData, useRealtimeQuote, useOptionChain, useDailyTrend, useExpiries, calibrateSignal } from '../hooks/useMarketData'
 import { getClaudeAnalysis, isAIEnabled, getActiveProvider, PROVIDER_INFO } from '../services/claudeService'
 import { generateSignal } from '../services/signalEngine'
-import { getATMStrike, getOTMStrike, getITMStrike } from '../services/optionsEngine'
+import { getOptionPriceLevels, getATMStrike, getOTMStrike, getITMStrike } from '../services/optionsEngine'
 import GlassCard from '../components/ui/GlassCard'
 import Badge from '../components/ui/Badge'
 import { formatPrice } from '../utils/formatters'
@@ -160,7 +160,7 @@ const ErrorCard = ({ error }) => (
 )
 
 // ── Main Claude result card ───────────────────────────────────────────────────
-const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, gate = 65, delay = 0 }) => {
+const ClaudeResultCard = ({ result, symbol, livePrice, vix, signal, chain, gate = 65, delay = 0 }) => {
   const { next: weeklyExpiry, monthly: monthlyExpiry } = useExpiries(symbol)   // real dates from Groww
   if (!result || result.error) return null
 
@@ -203,6 +203,12 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, gate = 65,
   const atmStrike  = engDir && engPrice ? getATMStrike(engPrice, symbol) : null
   const itmStrike  = engDir && engPrice ? getITMStrike(engPrice, symbol, engDir) : null
   const otmStrike  = engDir && engPrice ? getOTMStrike(engPrice, symbol, engDir) : null
+  // Option's own buy / target / stop, from the same spot distances as the levels above
+  const optLevels  = atmStrike ? getOptionPriceLevels({
+    symbol, spot: engPrice, strike: atmStrike, optionType: engDir,
+    pointsTarget: tgtDist, pointsSL: slDist, optionChain: chain, vix,
+  }) : null
+  const optLive    = optLevels?.source === 'live'
 
   return (
     <GlassCard
@@ -325,10 +331,38 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, gate = 65,
             </div>
             <div className={`text-lg font-black font-mono ${engIsCall ? 'text-bull' : 'text-bear'}`}>
               {symbol} {atmStrike} {engSuffix}
-              {legPremium(atmStrike) != null && (
-                <span className="text-sm text-white"> @ ₹{legPremium(atmStrike)} <span className="text-[10px] text-bull">(live)</span></span>
+              {optLevels && (
+                <span className="text-sm text-white"> @ ₹{optLevels.premium}{' '}
+                  <span className={`text-[10px] ${optLive ? 'text-bull' : 'text-hold'}`}>({optLive ? 'live' : 'est.'})</span>
+                </span>
               )}
             </div>
+            {optLevels && (
+              <>
+                <div className="grid grid-cols-3 gap-2 mt-2">
+                  {[
+                    { label: 'Buy',    value: optLevels.premium,       cls: 'text-white' },
+                    { label: 'Target', value: optLevels.premiumTarget, cls: 'text-bull' },
+                    { label: 'Stop',   value: optLevels.premiumSL,     cls: 'text-bear' },
+                  ].map(l => (
+                    <div key={l.label} className="rounded-lg py-1.5 text-center bg-white/[0.04] border border-white/10">
+                      <div className="text-[9px] text-gray-600 uppercase tracking-wide">{l.label}</div>
+                      <div className={`text-sm font-bold font-mono ${l.cls}`}>₹{l.value}</div>
+                    </div>
+                  ))}
+                </div>
+                {optLevels.premium - optLevels.delta * slDist <= 1 && (
+                  <div className="text-[10px] text-bear mt-1.5 leading-snug">
+                    ⚠️ The spot stop ({Math.round(slDist)} pts) is wider than this premium — hitting it loses almost all of it. Size for a total loss.
+                  </div>
+                )}
+                {!optLive && (
+                  <div className="text-[10px] text-hold mt-1.5 leading-snug">
+                    Estimated — the live option chain is unavailable. Check the real premium before ordering.
+                  </div>
+                )}
+              </>
+            )}
             <div className="text-[11px] text-gray-400 font-mono mt-1">
               Expiry: <span className="text-white font-bold">{weeklyExpiry}</span>
             </div>
@@ -645,6 +679,7 @@ const SymbolAnalysis = ({ symbol, autoRun }) => {
           result={aiResult}
           symbol={symbol}
           livePrice={quote?.price}
+          vix={quote?.vix}
           signal={signal}
           chain={chain}
           delay={0}
