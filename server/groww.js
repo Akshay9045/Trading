@@ -1,16 +1,36 @@
 // ── Groww Trading API client (server-side only) ────────────────────────────
-// Auth: exchange API key + secret for a short-lived access token (approval flow,
-// checksum = SHA256(secret + epochSeconds)). Token is cached until ~1 min before expiry.
+// Auth: exchange credentials for a short-lived access token, cached until ~1 min
+// before expiry. TOTP flow when GROWW_TOTP_TOKEN + GROWW_TOTP_SECRET are set, else
+// the approval flow (API key + secret, checksum = SHA256(secret + epochSeconds)).
 // Docs: https://groww.in/trade-api/docs/curl
 import https from 'https'
 import zlib from 'zlib'
 import crypto from 'crypto'
 
-export const GROWW = { apiKey: '', secret: '', token: null, exp: 0, cooldownUntil: 0, tokenPromise: null, lastAuthError: null }
+export const GROWW = { apiKey: '', secret: '', totpToken: '', totpSecret: '', token: null, exp: 0, cooldownUntil: 0, tokenPromise: null, lastAuthError: null }
 
-export const configureGroww = ({ apiKey, secret }) => {
+export const configureGroww = ({ apiKey, secret, totpToken, totpSecret }) => {
   GROWW.apiKey = apiKey || ''
   GROWW.secret = secret || ''
+  GROWW.totpToken  = totpToken || ''
+  GROWW.totpSecret = totpSecret || ''
+}
+
+// RFC 6238 code (SHA-1, 30s, 6 digits) from a base32 secret
+export function generateTotp(base32Secret, nowMs = Date.now()) {
+  const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
+  let bits = ''
+  for (const ch of base32Secret.toUpperCase().replace(/[\s=-]/g, '')) {
+    const v = ALPHABET.indexOf(ch)
+    if (v < 0) throw new Error('GROWW_TOTP_SECRET is not a valid base32 secret')
+    bits += v.toString(2).padStart(5, '0')
+  }
+  const key = Buffer.from((bits.match(/.{8}/g) || []).map(b => parseInt(b, 2)))
+  const counter = Buffer.alloc(8)
+  counter.writeBigUInt64BE(BigInt(Math.floor(nowMs / 30_000)))
+  const hmac = crypto.createHmac('sha1', key).update(counter).digest()
+  const offset = hmac[hmac.length - 1] & 0xf
+  return String((hmac.readUInt32BE(offset) & 0x7fffffff) % 1_000_000).padStart(6, '0')
 }
 
 // ── Generic HTTPS request (GET/POST) with gzip + body support ──────────────
@@ -44,13 +64,14 @@ function decodeJwtExpMs(token) {
 export async function growwAccessToken() {
   const now = Date.now()
   if (GROWW.token && now < GROWW.exp - 60_000) return GROWW.token
-  if (!GROWW.apiKey || !GROWW.secret) throw new Error('Groww credentials missing (GROWW_API_KEY / GROWW_API_SECRET)')
+  const useTotp = !!(GROWW.totpToken && GROWW.totpSecret)
+  if (!useTotp && (!GROWW.apiKey || !GROWW.secret)) throw new Error('Groww credentials missing (GROWW_TOTP_TOKEN + GROWW_TOTP_SECRET, or GROWW_API_KEY + GROWW_API_SECRET)')
 
-  // Cooldown: after a 429 we stop hitting the (heavily rate-limited) token API for
-  // a while, so one failure doesn't cascade into a retry storm across every request.
+  // Cooldown: after a failed login we stop hitting the token API (150 requests per
+  // 24h) for a while, so one failure doesn't cascade into a retry storm.
   if (GROWW.cooldownUntil && now < GROWW.cooldownUntil) {
     const secs = Math.ceil((GROWW.cooldownUntil - now) / 1000)
-    throw new Error(`Groww auth in cooldown (${secs}s left after rate limit)`)
+    throw new Error(`Groww auth paused (${secs}s left): ${GROWW.lastAuthError || 'login failed'}`)
   }
 
   // Single-flight: if a token fetch is already in progress, every caller awaits the
@@ -59,13 +80,14 @@ export async function growwAccessToken() {
 
   GROWW.tokenPromise = (async () => {
     const ts = Math.floor(now / 1000).toString()
-    const checksum = crypto.createHash('sha256').update(GROWW.secret + ts).digest('hex')
-    const body = JSON.stringify({ key_type: 'approval', checksum, timestamp: ts })
+    const body = JSON.stringify(useTotp
+      ? { key_type: 'totp', totp: generateTotp(GROWW.totpSecret, now) }
+      : { key_type: 'approval', checksum: crypto.createHash('sha256').update(GROWW.secret + ts).digest('hex'), timestamp: ts })
 
     const r = await httpsRequest({
       hostname: 'api.groww.in', path: '/v1/token/api/access', method: 'POST',
       headers: {
-        'Authorization': `Bearer ${GROWW.apiKey}`,
+        'Authorization': `Bearer ${useTotp ? GROWW.totpToken : GROWW.apiKey}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
         'X-API-VERSION': '1.0',
@@ -77,12 +99,15 @@ export async function growwAccessToken() {
       GROWW.cooldownUntil = Date.now() + 5 * 60_000   // back off 5 min on rate limit
       throw new Error(`Groww auth 429 (rate limited) — backing off 5 min: ${r.data.slice(0, 120)}`)
     }
-    if (r.status !== 200) throw new Error(`Groww auth ${r.status}: ${growwErrorMessage(r.data)}`)
+    if (r.status !== 200) {
+      GROWW.cooldownUntil = Date.now() + 5 * 60_000
+      throw new Error(`Groww auth ${r.status}: ${growwErrorMessage(r.data)}`)
+    }
     const j = JSON.parse(r.data)
     GROWW.token = j.token
     GROWW.exp   = decodeJwtExpMs(j.token) || Date.now() + 6 * 3600 * 1000
     GROWW.cooldownUntil = 0
-    console.log('\x1b[32m[Groww]\x1b[0m Access token ready')
+    console.log(`\x1b[32m[Groww]\x1b[0m Access token ready (${useTotp ? 'TOTP' : 'approval'})`)
     return GROWW.token
   })()
 

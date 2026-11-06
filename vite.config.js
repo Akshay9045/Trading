@@ -269,7 +269,7 @@ const marketPlugin = {
 export default defineConfig(({ mode }) => {
   // Load .env (all vars, no prefix filter) so server-side Groww creds are available
   const env = loadEnv(mode, process.cwd(), '')
-  configureGroww({ apiKey: env.GROWW_API_KEY, secret: env.GROWW_API_SECRET })
+  configureGroww({ apiKey: env.GROWW_API_KEY, secret: env.GROWW_API_SECRET, totpToken: env.GROWW_TOTP_TOKEN, totpSecret: env.GROWW_TOTP_SECRET })
   configureTrading(env)
 
   return {
