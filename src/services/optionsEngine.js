@@ -241,19 +241,16 @@ const premiumExits = (premium, rawDelta, pointsTarget, pointsSL) => {
 }
 
 // Buy / target / stop premiums for one strike. Uses the chain's LTP and delta when
-// available (source 'live'), else a price the user typed in (source 'manual'), else
-// the synthetic estimate (source 'estimated').
-export const getOptionPriceLevels = ({ symbol, spot, strike, optionType, pointsTarget, pointsSL, optionChain = null, vix, manualPremium = null }) => {
+// available (source 'live'), else the synthetic estimate (source 'estimated').
+export const getOptionPriceLevels = ({ symbol, spot, strike, optionType, pointsTarget, pointsSL, optionChain = null, vix }) => {
   const leg      = optionChain?.strikes?.get?.(strike)
   const ltp      = leg ? (optionType === 'CALL' ? leg.callLtp : leg.putLtp) : null
   const rawDelta = leg ? (optionType === 'CALL' ? leg.callDelta : leg.putDelta) : null
   const isLive   = ltp != null && ltp > 0
-  const isManual = !isLive && manualPremium > 0
-  const premium  = isLive ? Math.round(ltp)
-    : isManual ? Math.round(manualPremium)
+  const premium  = isLive
+    ? Math.round(ltp)
     : estimatePremium(spot, strike, getDaysToNextExpiry(symbol), optionType, optionChain?.atmIV ?? vix ?? 14.61)
-  const source   = isLive ? 'live' : isManual ? 'manual' : 'estimated'
-  return { premium, source, ...premiumExits(premium, rawDelta, pointsTarget, pointsSL) }
+  return { premium, source: isLive ? 'live' : 'estimated', ...premiumExits(premium, rawDelta, pointsTarget, pointsSL) }
 }
 
 // Professional conviction gate — backtested: only setups ≥65% confidence are net-positive.

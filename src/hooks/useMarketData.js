@@ -96,25 +96,34 @@ export const useMarketData = (symbol, timeframe = '1D') => {
 // Returns null until loaded or if the chain is unavailable (engine then falls
 // back to estimated premiums).
 // `refreshKey` (optional) — pass a value that changes when the user clicks refresh
-// to re-pull the chain on demand. No auto-poll: the chain is fetched on mount and
-// on symbol/refreshKey change only, to avoid hammering Groww's token endpoint.
-export const useOptionChain = (symbol, spot, refreshKey = 0) => {
+// to re-pull the chain on demand. `pollMs` (optional) keeps the premiums current;
+// after a failure it waits CHAIN_RETRY_MS, to avoid hammering Groww's token endpoint.
+const CHAIN_RETRY_MS = 5 * 60_000
+export const useOptionChain = (symbol, spot, refreshKey = 0, pollMs = 0) => {
   const [chain, setChain] = useState(null)
+  const spotRef = useRef(spot)
+  spotRef.current = spot
 
   useEffect(() => {
     let active = true
+    let failedAt = 0
     const load = async () => {
       try {
-        const data = await fetchOptionChain(symbol, spot)
+        const data = await fetchOptionChain(symbol, spotRef.current)
+        failedAt = 0
         if (active) setChain(data)
       } catch (err) {
+        failedAt = Date.now()
         if (active) setChain(null)
         console.warn('[useOptionChain] unavailable, using estimated premiums:', err.message)
       }
     }
     load()
-    return () => { active = false }
-  }, [symbol, refreshKey])   // spot excluded — avoids refetch on every price tick
+    const id = pollMs ? setInterval(() => {
+      if (Date.now() - failedAt >= CHAIN_RETRY_MS) load()
+    }, pollMs) : null
+    return () => { active = false; clearInterval(id) }
+  }, [symbol, refreshKey, pollMs])   // spot excluded — avoids refetch on every price tick
 
   return chain
 }

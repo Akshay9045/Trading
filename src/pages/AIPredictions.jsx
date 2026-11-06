@@ -162,7 +162,6 @@ const ErrorCard = ({ error }) => (
 // ── Main Claude result card ───────────────────────────────────────────────────
 const ClaudeResultCard = ({ result, symbol, livePrice, vix, signal, chain, gate = 65, delay = 0 }) => {
   const { next: weeklyExpiry, monthly: monthlyExpiry } = useExpiries(symbol)   // real dates from Groww
-  const [manualPremium, setManualPremium] = useState('')   // typed in when the live chain is down
   if (!result || result.error) return null
 
   const aiName        = PROVIDER_INFO[result.provider]?.name || 'AI'
@@ -208,10 +207,8 @@ const ClaudeResultCard = ({ result, symbol, livePrice, vix, signal, chain, gate 
   const optLevels  = atmStrike ? getOptionPriceLevels({
     symbol, spot: engPrice, strike: atmStrike, optionType: engDir,
     pointsTarget: tgtDist, pointsSL: slDist, optionChain: chain, vix,
-    manualPremium: Number(manualPremium),
   }) : null
-  const optLive    = optLevels?.source === 'live'
-  const optKnown   = optLive || optLevels?.source === 'manual'   // never show the estimate as a buy price
+  const optLive    = optLevels?.source === 'live'   // never show the estimate as a buy price
 
   return (
     <GlassCard
@@ -334,21 +331,14 @@ const ClaudeResultCard = ({ result, symbol, livePrice, vix, signal, chain, gate 
             </div>
             <div className={`text-lg font-black font-mono ${engIsCall ? 'text-bull' : 'text-bear'}`}>
               {symbol} {atmStrike} {engSuffix}
-              {optKnown && (
-                <span className="text-sm text-white"> @ ₹{optLevels.premium}{' '}
-                  <span className={`text-[10px] ${optLive ? 'text-bull' : 'text-hold'}`}>({optLive ? 'live' : 'your price'})</span>
-                </span>
+              {optLive && (
+                <span className="text-sm text-white"> @ ₹{optLevels.premium} <span className="text-[10px] text-bull">(live)</span></span>
               )}
             </div>
             {optLevels && !optLive && (
-              <label className="flex items-center gap-2 mt-2 text-[10px] text-hold leading-snug">
-                <span className="flex-1">Live premium unavailable — enter the current price of this option from your broker:</span>
-                <input type="number" min="0" step="0.05" placeholder="₹" value={manualPremium}
-                  onChange={e => setManualPremium(e.target.value)}
-                  className="w-20 px-2 py-1 rounded-lg bg-white/[0.06] border border-white/15 text-sm font-mono text-white text-right" />
-              </label>
+              <div className="text-[10px] text-gray-500 mt-1">Waiting for the live option price…</div>
             )}
-            {optKnown && (
+            {optLive && (
               <>
                 <div className="grid grid-cols-3 gap-2 mt-2">
                   {[
@@ -564,7 +554,7 @@ const SymbolAnalysis = ({ symbol, autoRun }) => {
   }, [candles, strictSignal, dailyTrend, timeframe])
   const { quote: liveQuote }  = useRealtimeQuote(symbol, 5000)
   const quote                 = liveQuote || marketQuote
-  const chain                 = useOptionChain(symbol, quote?.price)   // live option premiums
+  const chain                 = useOptionChain(symbol, quote?.price, 0, 30_000)   // live option premiums
   const [aiResult, setAiResult]  = useState(null)
   const [aiLoading, setAiLoading] = useState(false)
   const [errorMsg, setErrorMsg]  = useState(null)
