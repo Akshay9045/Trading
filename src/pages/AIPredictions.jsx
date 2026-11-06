@@ -209,6 +209,10 @@ const ClaudeResultCard = ({ result, symbol, livePrice, vix, signal, chain, gate 
     pointsTarget: tgtDist, pointsSL: slDist, optionChain: chain, vix,
   }) : null
   const optLive    = optLevels?.source === 'live'   // never show the estimate as a buy price
+  // The LLM's own index target, converted to a premium with the same delta. No value
+  // when it sits on the losing side of the engine's direction (the two disagree).
+  const aiPoints   = result.targetZone > 0 && engPrice ? (engIsCall ? result.targetZone - engPrice : engPrice - result.targetZone) : 0
+  const aiOptTarget = optLevels && aiPoints > 0 ? Math.round(optLevels.premium + optLevels.delta * aiPoints) : null
 
   return (
     <GlassCard
@@ -299,15 +303,17 @@ const ClaudeResultCard = ({ result, symbol, livePrice, vix, signal, chain, gate 
             )}
             {optLive && (
               <>
-                <div className="grid grid-cols-3 gap-2 mt-3">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3">
                   {[
                     { label: 'Buy',    value: optLevels.premium,       cls: 'text-white' },
                     { label: 'Target', value: optLevels.premiumTarget, cls: 'text-bull' },
                     { label: 'Stop Loss', value: optLevels.premiumSL,  cls: 'text-bear' },
+                    { label: 'AI Target', value: aiOptTarget,          cls: 'text-primary-300', note: 'AI guess · unvalidated' },
                   ].map(l => (
                     <div key={l.label} className="rounded-xl py-2.5 text-center bg-white/[0.05] border border-white/10">
                       <div className="text-[10px] text-gray-500 uppercase tracking-wide mb-0.5">{l.label}</div>
-                      <div className={`text-xl font-black font-mono ${l.cls}`}>₹{l.value}</div>
+                      <div className={`text-xl font-black font-mono ${l.cls}`}>{l.value != null ? `₹${l.value}` : '—'}</div>
+                      {l.note && <div className="text-[9px] text-gray-600 mt-0.5">{l.note}</div>}
                     </div>
                   ))}
                 </div>
