@@ -362,9 +362,9 @@ const ClaudeResultCard = ({ result, symbol, livePrice, vix, signal, chain, gate 
                     </div>
                   ))}
                 </div>
-                {optLevels.premium - optLevels.delta * slDist <= 1 && (
+                {optLevels.premiumSL < optLevels.premium * 0.25 && (
                   <div className="text-[10px] text-bear mt-1.5 leading-snug">
-                    ⚠️ The spot stop ({Math.round(slDist)} pts) is wider than this premium — hitting it loses almost all of it. Size for a total loss.
+                    ⚠️ The spot stop ({Math.round(slDist)} pts) would wipe out most of this premium — hitting it loses almost all of it. Size for a total loss.
                   </div>
                 )}
               </>
