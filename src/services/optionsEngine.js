@@ -248,9 +248,16 @@ export const getOptionPriceLevels = ({ symbol, spot, strike, optionType, pointsT
   const rawDelta = leg ? (optionType === 'CALL' ? leg.callDelta : leg.putDelta) : null
   const isLive   = ltp != null && ltp > 0
   const premium  = isLive
-    ? Math.round(ltp)
+    ? ltp
     : estimatePremium(spot, strike, getDaysToNextExpiry(symbol), optionType, optionChain?.atmIV ?? vix ?? 14.61)
-  return { premium, source: isLive ? 'live' : 'estimated', ...premiumExits(premium, rawDelta, pointsTarget, pointsSL) }
+  const exits    = premiumExits(premium, rawDelta, pointsTarget, pointsSL)
+  // Exact levels on the option's ₹0.05 tick, not rounded to whole rupees
+  const toTick   = (v) => Math.round(v * 20) / 20
+  return {
+    premium, source: isLive ? 'live' : 'estimated', ...exits,
+    premiumTarget: toTick(premium + exits.delta * pointsTarget),
+    premiumSL:     Math.max(0.05, toTick(premium - exits.delta * pointsSL)),
+  }
 }
 
 // Professional conviction gate — backtested: only setups ≥65% confidence are net-positive.

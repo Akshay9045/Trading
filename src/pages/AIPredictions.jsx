@@ -208,13 +208,13 @@ const ClaudeResultCard = ({ result, symbol, livePrice, vix, signal, chain, gate 
     symbol, spot: engPrice, strike: atmStrike, optionType: engDir,
     pointsTarget: tgtDist, pointsSL: slDist, optionChain: chain, vix,
   }) : null
-  const optLive    = optLevels?.source === 'live'   // never show the estimate as a buy price
+  const optLive    = optLevels?.source === 'live' && !chain?._stale   // never show an estimate or old price as live
   // The LLM's own index target, converted to a premium with the same delta. No value
   // when the LLM says WAIT or picks the other direction, or when the target is more
   // than 2 ATR away (a guess the data can't support).
   const aiPoints   = result.targetZone > 0 && engPrice ? (engIsCall ? result.targetZone - engPrice : engPrice - result.targetZone) : 0
   const aiMaxPoints = signal?.indicators?.atr ? 2 * signal.indicators.atr : Infinity
-  const aiOptTarget = optLevels && result.optionType === engDir && aiPoints > 0 && aiPoints <= aiMaxPoints ? Math.round(optLevels.premium + optLevels.delta * aiPoints) : null
+  const aiOptTarget = optLevels && result.optionType === engDir && aiPoints > 0 && aiPoints <= aiMaxPoints ? Math.round((optLevels.premium + optLevels.delta * aiPoints) * 20) / 20 : null
 
   return (
     <GlassCard
@@ -297,11 +297,11 @@ const ClaudeResultCard = ({ result, symbol, livePrice, vix, signal, chain, gate 
             <div className={`text-lg font-black font-mono ${engIsCall ? 'text-bull' : 'text-bear'}`}>
               {symbol} {atmStrike} {engSuffix}
               {optLive && (
-                <span className="text-sm text-white"> @ ₹{optLevels.premium} <span className="text-[10px] text-bull">(live)</span></span>
+                <span className="text-sm text-white"> @ ₹{optLevels.premium.toFixed(2)} <span className="text-[10px] text-bull">(live)</span></span>
               )}
             </div>
             {optLevels && !optLive && (
-              <div className="text-[10px] text-gray-500 mt-1">Waiting for the live option price… it updates by itself within 30 seconds.</div>
+              <div className="text-[10px] text-gray-500 mt-1">Waiting for the live option price… it updates by itself within 10 seconds.</div>
             )}
             {optLive && (
               <>
@@ -314,7 +314,7 @@ const ClaudeResultCard = ({ result, symbol, livePrice, vix, signal, chain, gate 
                   ].map(l => (
                     <div key={l.label} className="rounded-xl py-2.5 text-center bg-white/[0.05] border border-white/10">
                       <div className="text-[10px] text-gray-500 uppercase tracking-wide mb-0.5">{l.label}</div>
-                      <div className={`text-xl font-black font-mono ${l.cls}`}>{l.value != null ? `₹${l.value}` : '—'}</div>
+                      <div className={`text-xl font-black font-mono ${l.cls}`}>{l.value != null ? `₹${l.value.toFixed(2)}` : '—'}</div>
                       {l.note && <div className="text-[9px] text-gray-600 mt-0.5">{l.note}</div>}
                     </div>
                   ))}
@@ -572,7 +572,7 @@ const SymbolAnalysis = ({ symbol, autoRun }) => {
   }, [candles, strictSignal, dailyTrend, timeframe])
   const { quote: liveQuote }  = useRealtimeQuote(symbol, 5000)
   const quote                 = liveQuote || marketQuote
-  const chain                 = useOptionChain(symbol, quote?.price, 0, 30_000)   // live option premiums
+  const chain                 = useOptionChain(symbol, quote?.price, 0, 10_000)   // live option premiums
   const [aiResult, setAiResult]  = useState(null)
   const [aiLoading, setAiLoading] = useState(false)
   const [errorMsg, setErrorMsg]  = useState(null)
