@@ -301,7 +301,7 @@ const ClaudeResultCard = ({ result, symbol, livePrice, vix, signal, chain, gate 
               )}
             </div>
             {optLevels && !optLive && (
-              <div className="text-[10px] text-gray-500 mt-1">Waiting for the live option price…</div>
+              <div className="text-[10px] text-gray-500 mt-1">Waiting for the live option price… it updates by itself within 30 seconds.</div>
             )}
             {optLive && (
               <>
