@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { getNextExpiryISO } from './optionsEngine'
+import { resolveNextExpiryISO } from './optionsEngine'
 
 // ── Symbol maps ────────────────────────────────────────────────────────────
 
@@ -36,11 +36,14 @@ const YF_RANGE    = { '1m':'1d','5m':'5d','15m':'1mo','1h':'3mo','1D':'1y','1W':
 
 // ── Cache ──────────────────────────────────────────────────────────────────
 const cache = {}
+const inflight = {}   // key → pending promise, so simultaneous callers share one request
 const cached = (key, ttlMs, fn) => {
   const now = Date.now()
   const hit = cache[key]
   if (hit && now - hit.ts < ttlMs) return Promise.resolve(hit.data)
-  return fn()
+  if (inflight[key]) return inflight[key]
+  return (inflight[key] = fn()
+    .finally(() => { delete inflight[key] })
     .then(data => { cache[key] = { data, ts: now }; return data })
     .catch(err => {
       if (hit) {
@@ -52,7 +55,7 @@ const cached = (key, ttlMs, fn) => {
           : hit.data
       }
       throw err
-    })
+    }))
 }
 
 // ── NSE India — live quotes via Vite middleware ───────────────────────────
@@ -134,6 +137,15 @@ const fetchYFCandles = async (symbol, timeframe, outputSize) => {
   return candles
 }
 
+// ── NSE — daily index candles (last resort; daily only, up to the last close) ──
+const fetchNSEDailyCandles = async (symbol, outputSize) => {
+  const { data } = await axios.get('/api/nse-history', { params: { symbol }, timeout: 30000 })
+  if (data.error) throw new Error(data.error)
+  const candles = (data.candles || []).slice(-outputSize)
+  if (candles.length < 5) throw new Error('Not enough NSE candles')
+  return candles
+}
+
 // ── Public API ─────────────────────────────────────────────────────────────
 
 export const fetchQuote = (symbol) =>
@@ -181,7 +193,13 @@ export const fetchCandles = (symbol, timeframe = '1D', outputSize = 200) =>
         console.warn(`[apiService] Groww candles failed for ${symbol}, falling back to Yahoo:`, err.message)
       }
     }
-    return fetchYFCandles(symbol, timeframe, outputSize)
+    try {
+      return await fetchYFCandles(symbol, timeframe, outputSize)
+    } catch (err) {
+      if (timeframe !== '1D' || !GROWW_SYMBOLS[symbol]) throw err
+      console.warn(`[apiService] Yahoo candles failed for ${symbol}, falling back to NSE:`, err.message)
+      return fetchNSEDailyCandles(symbol, outputSize)
+    }
   })
 
 // ── Groww — option chain (real per-strike premiums + IV) ───────────────────
@@ -253,8 +271,11 @@ const normalizeOptionChain = (raw, spot) => {
   return { strikes, atmIV, count: strikes.size }
 }
 
-export const fetchOptionChain = (symbol, spot, expiryISO = getNextExpiryISO()) =>
-  cached(`chain:${symbol}:${expiryISO}`, 30_000, async () => {
+// Expiry defaults to the next one listed in Groww's instrument list (calculated
+// only if that list is unreachable) — BANKNIFTY has monthly expiries only.
+export const fetchOptionChain = async (symbol, spot, expiryISO) => {
+  if (!expiryISO) expiryISO = await resolveNextExpiryISO(symbol)
+  return cached(`chain:${symbol}:${expiryISO}`, 8_000, async () => {
     const { data } = await axios.get('/api/groww/option-chain', {
       params: { symbol, expiry: expiryISO }, timeout: 12000,
     })
@@ -263,6 +284,7 @@ export const fetchOptionChain = (symbol, spot, expiryISO = getNextExpiryISO()) =
     if (!chain.count) throw new Error('Option chain returned no parseable strikes')
     return { ...chain, expiry: expiryISO }
   })
+}
 
 export const fetchMultipleQuotes = (symbols) =>
   Promise.allSettled(symbols.map(s => fetchQuote(s))).then(results =>

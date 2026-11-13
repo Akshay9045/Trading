@@ -1,5 +1,7 @@
 // Options Signal Engine — generates CALL/PUT recommendations from a base signal
 
+import { tradeApi } from './tradeApi'
+
 const STRIKE_INTERVALS = {
   NIFTY:     50,
   BANKNIFTY: 100,
@@ -79,9 +81,12 @@ const rollBackToTradingDay = (date) => {
   return date
 }
 
-const getNextExpiryDate = () => {
+// Calculated fallback — used only when Groww's instrument list can't be reached.
+// NIFTY: next weekly Tuesday. BANKNIFTY: monthly only (last Tuesday).
+const calcNextExpiryDate = (symbol) => {
   const today = new Date()
   today.setHours(0, 0, 0, 0)
+  if (symbol === 'BANKNIFTY') return calcMonthlyExpiryDate()
   const baseOffset = (TUESDAY - today.getDay() + 7) % 7   // days to upcoming Tuesday (0 if today)
   // Find the first Tuesday-based expiry that lands today or later (after holiday roll-back)
   for (let week = 0; week < 8; week++) {
@@ -93,25 +98,6 @@ const getNextExpiryDate = () => {
   return rollBackToTradingDay(new Date(today.getTime() + baseOffset * 86400000))
 }
 
-export const getNextExpiry = () =>
-  getNextExpiryDate().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
-
-// ISO date (YYYY-MM-DD) of the next weekly expiry — for Groww option-chain API calls
-export const getNextExpiryISO = () => {
-  const d  = getNextExpiryDate()
-  const y  = d.getFullYear()
-  const m  = String(d.getMonth() + 1).padStart(2, '0')
-  const dd = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${dd}`
-}
-
-const getDaysToNextExpiry = () => {
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const expiry = getNextExpiryDate()
-  return Math.max(1, Math.round((expiry - today) / 86400000))
-}
-
 // Last Tuesday of the given month (year, month 0-indexed), rolled back if a holiday
 const lastTuesdayOfMonth = (year, month) => {
   const d = new Date(year, month + 1, 0)   // last calendar day of the month
@@ -119,7 +105,7 @@ const lastTuesdayOfMonth = (year, month) => {
   return rollBackToTradingDay(d)
 }
 
-export const getMonthlyExpiry = () => {
+const calcMonthlyExpiryDate = () => {
   const today = new Date()
   today.setHours(0, 0, 0, 0)
   let expiry = lastTuesdayOfMonth(today.getFullYear(), today.getMonth())
@@ -128,7 +114,104 @@ export const getMonthlyExpiry = () => {
     const year  = nextMonth > 11 ? today.getFullYear() + 1 : today.getFullYear()
     expiry = lastTuesdayOfMonth(year, nextMonth % 12)
   }
-  return expiry.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+  return expiry
+}
+
+// ── Real expiries from Groww's instrument list (server/instruments.js) ───────
+// NSE moves expiries for holidays and BANKNIFTY is monthly-only, so the listed
+// dates are the source of truth. Loaded once per symbol, shared by every caller.
+const EXPIRY_UNDERLYINGS = ['NIFTY', 'BANKNIFTY']
+const RETRY_AFTER_MS = 60_000
+const realExpiries = {}       // symbol → ['YYYY-MM-DD', ...] sorted
+const pendingExpiries = {}    // symbol → Promise
+const failedAt = {}           // symbol → ms timestamp of last failed load
+const expiryListeners = new Set()
+
+const isoToDate = (iso) => {
+  const [y, m, d] = iso.split('-').map(Number)
+  return new Date(y, m - 1, d)
+}
+
+const upcomingRealExpiries = (symbol) => {
+  const list = realExpiries[symbol]
+  if (!list) return null
+  const today = localDateKey(new Date())
+  const upcoming = list.filter(e => e >= today)
+  return upcoming.length ? upcoming : null
+}
+
+// Fetch the listed expiries for `symbol`. Resolves to the list, or null when the
+// server is unreachable (callers then use the calculated fallback).
+export const loadExpiries = (symbol) => {
+  if (!EXPIRY_UNDERLYINGS.includes(symbol)) return Promise.resolve(null)
+  if (upcomingRealExpiries(symbol)) return Promise.resolve(upcomingRealExpiries(symbol))
+  if (pendingExpiries[symbol]) return pendingExpiries[symbol]
+  if (failedAt[symbol] && Date.now() - failedAt[symbol] < RETRY_AFTER_MS) return Promise.resolve(null)
+
+  pendingExpiries[symbol] = tradeApi.expiries(symbol)
+    .then(({ expiries }) => {
+      if (!Array.isArray(expiries) || !expiries.length) throw new Error('no upcoming expiries listed')
+      realExpiries[symbol] = [...expiries].sort()
+      delete failedAt[symbol]
+      expiryListeners.forEach(fn => fn())
+      return upcomingRealExpiries(symbol)
+    })
+    .catch(err => {
+      failedAt[symbol] = Date.now()
+      console.warn(`[optionsEngine] ${symbol} expiries unavailable, using calculated dates:`, err.message)
+      return null
+    })
+    .finally(() => { delete pendingExpiries[symbol] })
+  return pendingExpiries[symbol]
+}
+
+// Subscribe to "real expiries arrived" — returns an unsubscribe function.
+export const subscribeExpiries = (fn) => {
+  expiryListeners.add(fn)
+  return () => expiryListeners.delete(fn)
+}
+
+// 'groww' when the dates come from the instrument list, else 'calculated'
+export const getExpirySource = (symbol) => upcomingRealExpiries(symbol) ? 'groww' : 'calculated'
+
+const getNextExpiryDate = (symbol = 'NIFTY') => {
+  const real = upcomingRealExpiries(symbol)
+  if (real) return isoToDate(real[0])
+  loadExpiries(symbol)   // fire-and-forget; subscribers re-render when it lands
+  return calcNextExpiryDate(symbol)
+}
+
+const formatExpiry = (d) =>
+  d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+
+export const getNextExpiry = (symbol = 'NIFTY') => formatExpiry(getNextExpiryDate(symbol))
+
+// ISO date (YYYY-MM-DD) of the next expiry — for Groww option-chain API calls
+export const getNextExpiryISO = (symbol = 'NIFTY') => localDateKey(getNextExpiryDate(symbol))
+
+// Like getNextExpiryISO, but waits for the instrument list first so API calls
+// never go to a calculated (possibly non-existent) expiry when the real one is available.
+export const resolveNextExpiryISO = async (symbol = 'NIFTY') => {
+  await loadExpiries(symbol)
+  return getNextExpiryISO(symbol)
+}
+
+const getDaysToNextExpiry = (symbol) => {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const expiry = getNextExpiryDate(symbol)
+  return Math.max(1, Math.round((expiry - today) / 86400000))
+}
+
+// Monthly expiry = the last listed expiry of the first month that still has one
+export const getMonthlyExpiry = (symbol = 'NIFTY') => {
+  const real = upcomingRealExpiries(symbol)
+  if (real) {
+    const month = real[0].slice(0, 7)
+    return formatExpiry(isoToDate(real.filter(e => e.startsWith(month)).pop()))
+  }
+  loadExpiries(symbol)
+  return formatExpiry(calcMonthlyExpiryDate())
 }
 
 // VIX-based Black-Scholes approximation for option premium
@@ -146,9 +229,56 @@ const estimatePremium = (price, strike, daysToExpiry, type, vix = 10.2) => {
   return Math.max(5, Math.round(intrinsic + timeValue))
 }
 
-// Professional conviction gate — backtested: only setups ≥65% confidence are net-positive.
-// Below this, a pro waits rather than overtrade mediocre signals.
+// Option buyers lose at most this share of the premium at the stop. Without a cap a
+// wide (Daily ATR) spot stop maps to a premium stop near ₹0 — i.e. no stop at all.
+export const MAX_PREMIUM_STOP_PCT = 0.35
+
+// Option target/SL from the underlying's move: premium ± delta × spot points,
+// with the stop capped at MAX_PREMIUM_STOP_PCT of the premium.
+const premiumExits = (premium, rawDelta, pointsTarget, pointsSL) => {
+  const delta = rawDelta != null ? Math.abs(rawDelta) : 0.5
+  const capped = premium * (1 - MAX_PREMIUM_STOP_PCT)
+  return {
+    delta,
+    deltaBasis:    rawDelta != null ? 'chain-delta' : 'approx-delta-0.5',
+    premiumTarget: Math.max(premium + 1, Math.round(premium + delta * pointsTarget)),
+    premiumSL:     Math.max(1, Math.round(Math.max(capped, premium - delta * pointsSL))),
+    stopCapped:    premium - delta * pointsSL < capped,
+  }
+}
+
+// Buy / target / stop premiums for one strike. Uses the chain's LTP and delta when
+// available (source 'live'), else the synthetic estimate (source 'estimated').
+export const getOptionPriceLevels = ({ symbol, spot, strike, optionType, pointsTarget, pointsSL, optionChain = null, vix }) => {
+  const leg      = optionChain?.strikes?.get?.(strike)
+  const ltp      = leg ? (optionType === 'CALL' ? leg.callLtp : leg.putLtp) : null
+  const rawDelta = leg ? (optionType === 'CALL' ? leg.callDelta : leg.putDelta) : null
+  const isLive   = ltp != null && ltp > 0
+  const premium  = isLive
+    ? ltp
+    : estimatePremium(spot, strike, getDaysToNextExpiry(symbol), optionType, optionChain?.atmIV ?? vix ?? 14.61)
+  const exits    = premiumExits(premium, rawDelta, pointsTarget, pointsSL)
+  // Exact levels on the option's ₹0.05 tick, not rounded to whole rupees
+  const toTick   = (v) => Math.round(v * 20) / 20
+  return {
+    premium, source: isLive ? 'live' : 'estimated', ...exits,
+    premiumTarget: toTick(premium + exits.delta * pointsTarget),
+    premiumSL:     Math.max(0.05, toTick(Math.max(premium * (1 - MAX_PREMIUM_STOP_PCT), premium - exits.delta * pointsSL))),
+  }
+}
+
+// Untested setups (too little history to backtest) need this formula score to grade OK.
 const MIN_CONVICTION = 65
+
+// How much to trust a pick. STRONG/OK need a positive backtested edge (or, untested,
+// a high formula score); everything else is WEAK — still shown, clearly labelled.
+const gradeSignal = ({ calibrated, expectancy, backtestWinRate, confidence }) => {
+  if (calibrated) {
+    if (expectancy != null && expectancy > 0) return backtestWinRate >= 50 ? 'STRONG' : 'OK'
+    return 'WEAK'
+  }
+  return confidence >= MIN_CONVICTION ? 'OK' : 'WEAK'
+}
 
 // Main function: converts a base signal into an options trade.
 // `optionChain` (optional) is the normalized chain from apiService.fetchOptionChain:
@@ -158,39 +288,32 @@ const MIN_CONVICTION = 65
 export const buildOptionsSignal = (baseSignal, symbol, quote, optionChain = null) => {
   if (!baseSignal || !quote) return null
 
-  const { type, entry, target, stopLoss, confidence, reasons, rrRatio, indicators,
+  const { type, entry: candleClose, target: candleTarget, stopLoss: candleStop, confidence, reasons, rrRatio, indicators,
           calibrated, expectancy, backtestWinRate, backtestSamples, bucketWinRate, bucketSamples } = baseSignal
 
-  // Gate: when the signal is calibrated (we have real backtest history), only trade
-  // setups with POSITIVE backtested expectancy after costs — that's the honest
-  // criterion, not an arbitrary confidence %. Without enough history, fall back to
-  // the old formula-confidence gate but flag it as untested.
-  const pass = type !== 'HOLD' && (
-    calibrated ? (expectancy != null && expectancy > 0) : confidence >= MIN_CONVICTION
-  )
-  if (!pass) {
-    return {
-      action: 'WAIT',
-      optionType: null,
-      symbol,
-      price: entry,
-      confidence,
-      calibrated, expectancy, backtestWinRate, backtestSamples, bucketWinRate, bucketSamples,
-      reasons,
-      indicators,
-      message: type === 'HOLD'
-        ? 'No directional bias — market consolidating. Wait for a breakout.'
-        : calibrated
-          ? `Backtested expectancy is ${expectancy} R/trade over ${backtestSamples} trades — historically this setup did not make money after costs. Waiting is the trade.`
-          : `Conviction ${confidence}% is below the ${MIN_CONVICTION}% threshold and there isn't enough history to backtest it yet. No high-quality setup right now.`,
-    }
-  }
+  // Always a CALL or PUT pick (callers pass an always-signal from useDirectionalSignal).
+  // A HOLD can only come from a caller using the filtered engine — no pick to show.
+  if (type !== 'BUY' && type !== 'SELL') return null
+
+  // The signal's levels are anchored on the last candle close (yesterday on the Daily).
+  // Re-anchor them on the live price so the strike and "buy at" are for the market now;
+  // the point distances to target and stop stay the same.
+  const live     = Number(quote?.price)
+  const entry    = Number.isFinite(live) && live > 0 ? live : candleClose
+  const shift    = entry - candleClose
+  const target   = candleTarget + shift
+  const stopLoss = candleStop + shift
+
+  // Win chance: the real backtested win rate when there's enough history, else the
+  // engine's formula score (labelled untested in the UI).
+  const grade     = gradeSignal({ calibrated, expectancy, backtestWinRate, confidence })
+  const winChance = calibrated && backtestWinRate != null ? backtestWinRate : confidence
 
   const optionType    = type === 'BUY' ? 'CALL' : 'PUT'
   const atm           = getATMStrike(entry, symbol)
   const itmStrike     = getITMStrike(entry, symbol, optionType)
   const otmStrike     = getOTMStrike(entry, symbol, optionType)
-  const daysToExpiry  = getDaysToNextExpiry()
+  const daysToExpiry  = getDaysToNextExpiry(symbol)
 
   // Prefer the live chain's ATM implied volatility; fall back to quote VIX.
   const vix           = optionChain?.atmIV ?? quote?.vix ?? 14.61
@@ -222,17 +345,16 @@ export const buildOptionsSignal = (baseSignal, symbol, quote, optionChain = null
   // else ~0.5 for an ATM option. premium ≈ atmPremium ± delta × spot-move.
   const atmLeg     = optionChain?.strikes?.get?.(atm)
   const rawDelta   = atmLeg ? (optionType === 'CALL' ? atmLeg.callDelta : atmLeg.putDelta) : null
-  const delta      = rawDelta != null ? Math.abs(rawDelta) : 0.5
-  const deltaBasis = rawDelta != null ? 'chain-delta' : 'approx-delta-0.5'
-  const premiumTarget = Math.max(atmPremium + 1, Math.round(atmPremium + delta * pointsTarget))
-  const premiumSL     = Math.max(1,              Math.round(atmPremium - delta * pointsSL))
+  const { delta, deltaBasis, premiumTarget, premiumSL, stopCapped } = premiumExits(atmPremium, rawDelta, pointsTarget, pointsSL)
 
   return {
     action:         type === 'BUY' ? 'BUY CALL' : 'BUY PUT',
     optionType,
     symbol,
-    expiry:         getNextExpiry(),
-    monthlyExpiry:  getMonthlyExpiry(),
+    expiry:         getNextExpiry(symbol),
+    expiryISO:      getNextExpiryISO(symbol),
+    expirySource:   getExpirySource(symbol),
+    monthlyExpiry:  getMonthlyExpiry(symbol),
 
     // Underlying levels
     spotEntry:      entry,
@@ -254,6 +376,7 @@ export const buildOptionsSignal = (baseSignal, symbol, quote, optionChain = null
     premiumTarget,
     premiumSL,
     premiumSource,                 // 'live' (real Groww LTP) or 'estimated'
+    stopCapped,                    // true when the stop was tightened to MAX_PREMIUM_STOP_PCT
     deltaBasis,                    // 'chain-delta' (real) or 'approx-delta-0.5'
     impliedVol: optionChain?.atmIV != null
       ? parseFloat(optionChain.atmIV.toFixed(1))
@@ -266,6 +389,9 @@ export const buildOptionsSignal = (baseSignal, symbol, quote, optionChain = null
     bucketWinRate,
     bucketSamples,
     expectancy,
+    grade,                         // 'STRONG' | 'OK' | 'WEAK'
+    winChance,                     // % — backtested when calibrated, else formula score
+    winChanceBasis: calibrated && backtestWinRate != null ? 'backtested' : 'untested',
 
     confidence,
     rrRatio,

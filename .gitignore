@@ -15,3 +15,6 @@ dist/
 npm-debug.log*
 .vscode/
 .idea/
+
+# Local runtime state (instrument cache, paper trades, order brackets)
+.cache/

@@ -2,7 +2,10 @@ import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import https from 'https'
 import zlib from 'zlib'
-import crypto from 'crypto'
+import { configureGroww, growwGet } from './server/groww.js'
+import { nseDailyCandles } from './server/nseHistory.js'
+import { longHistory } from './server/history.js'
+import { configureTrading, tradingMiddleware, startTrading } from './server/trading.js'
 
 const BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
 
@@ -41,107 +44,12 @@ function httpsGet(options) {
   })
 }
 
-// ── Generic HTTPS request (GET/POST) with gzip + body support ──────────────
-function httpsRequest(options, body) {
-  return new Promise((resolve, reject) => {
-    const req = https.request({ ...options, headers: { 'Accept-Encoding': 'gzip, deflate', ...options.headers } }, res => {
-      const encoding = res.headers['content-encoding']
-      let stream = res
-      if (encoding === 'gzip')    stream = res.pipe(zlib.createGunzip())
-      if (encoding === 'deflate') stream = res.pipe(zlib.createInflate())
-      let data = ''
-      stream.on('data', c => (data += c))
-      stream.on('end', () => resolve({ data, status: res.statusCode }))
-      stream.on('error', reject)
-    })
-    req.on('error', reject)
-    req.setTimeout(15000, () => { req.destroy(); reject(new Error('timeout')) })
-    if (body) req.write(body)
-    req.end()
-  })
-}
-
-// ── Groww Trading API ──────────────────────────────────────────────────────
-// Auth: exchange API key + secret for a short-lived access token (approval flow,
-// checksum = SHA256(secret + epochSeconds)). Token is cached until ~1 min before expiry.
-const GROWW = { apiKey: '', secret: '', token: null, exp: 0, cooldownUntil: 0, tokenPromise: null }
-
 // Map app symbols → Groww trading_symbol
 const GROWW_SYMBOL = { NIFTY: 'NIFTY', BANKNIFTY: 'BANKNIFTY' }
 
 // Timeframe → Groww candle interval (minutes) and how many days of history to pull
 const GROWW_INTERVAL = { '1m': 1, '5m': 5, '15m': 15, '1h': 60, '1D': 1440, '1W': 1440 }
 const GROWW_DAYS     = { '1m': 3, '5m': 10, '15m': 20, '1h': 60, '1D': 400, '1W': 400 }
-
-function decodeJwtExpMs(token) {
-  try {
-    const seg = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')
-    const payload = JSON.parse(Buffer.from(seg, 'base64').toString())
-    return (payload.exp || 0) * 1000
-  } catch { return 0 }
-}
-
-async function growwAccessToken() {
-  const now = Date.now()
-  if (GROWW.token && now < GROWW.exp - 60_000) return GROWW.token
-  if (!GROWW.apiKey || !GROWW.secret) throw new Error('Groww credentials missing (GROWW_API_KEY / GROWW_API_SECRET)')
-
-  // Cooldown: after a 429 we stop hitting the (heavily rate-limited) token API for
-  // a while, so one failure doesn't cascade into a retry storm across every request.
-  if (GROWW.cooldownUntil && now < GROWW.cooldownUntil) {
-    const secs = Math.ceil((GROWW.cooldownUntil - now) / 1000)
-    throw new Error(`Groww auth in cooldown (${secs}s left after rate limit)`)
-  }
-
-  // Single-flight: if a token fetch is already in progress, every caller awaits the
-  // SAME request instead of each firing its own (which is what tripped the 429).
-  if (GROWW.tokenPromise) return GROWW.tokenPromise
-
-  GROWW.tokenPromise = (async () => {
-    const ts = Math.floor(now / 1000).toString()
-    const checksum = crypto.createHash('sha256').update(GROWW.secret + ts).digest('hex')
-    const body = JSON.stringify({ key_type: 'approval', checksum, timestamp: ts })
-
-    const r = await httpsRequest({
-      hostname: 'api.groww.in', path: '/v1/token/api/access', method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${GROWW.apiKey}`,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'X-API-VERSION': '1.0',
-        'Content-Length': Buffer.byteLength(body),
-      },
-    }, body)
-
-    if (r.status === 429) {
-      GROWW.cooldownUntil = Date.now() + 5 * 60_000   // back off 5 min on rate limit
-      throw new Error(`Groww auth 429 (rate limited) — backing off 5 min: ${r.data.slice(0, 120)}`)
-    }
-    if (r.status !== 200) throw new Error(`Groww auth ${r.status}: ${r.data.slice(0, 160)}`)
-    const j = JSON.parse(r.data)
-    GROWW.token = j.token
-    GROWW.exp   = decodeJwtExpMs(j.token) || Date.now() + 6 * 3600 * 1000
-    GROWW.cooldownUntil = 0
-    console.log('\x1b[32m[Groww]\x1b[0m Access token ready')
-    return GROWW.token
-  })()
-
-  try {
-    return await GROWW.tokenPromise
-  } finally {
-    GROWW.tokenPromise = null   // clear so the next expiry can fetch a fresh token
-  }
-}
-
-async function growwGet(path) {
-  const token = await growwAccessToken()
-  const r = await httpsRequest({
-    hostname: 'api.groww.in', path, method: 'GET',
-    headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json', 'X-API-VERSION': '1.0' },
-  })
-  if (r.status !== 200) throw new Error(`Groww ${r.status}: ${r.data.slice(0, 160)}`)
-  return JSON.parse(r.data)
-}
 
 // Groww expects exchange-local time (IST), not UTC — shift +5:30 before formatting
 const growwFmtTime = (d) => new Date(d.getTime() + 5.5 * 3600 * 1000).toISOString().slice(0, 19).replace('T', ' ')
@@ -273,6 +181,36 @@ const marketPlugin = {
       }
     })
 
+    // ── Groww: long candle history for research/backtests (chunked, disk-cached) ──
+    server.middlewares.use('/api/groww/history', async (req, res) => {
+      res.setHeader('Content-Type', 'application/json')
+      res.setHeader('Cache-Control', 'no-cache')
+      try {
+        const url    = new URL(req.originalUrl, 'http://localhost')
+        const symbol = (url.searchParams.get('symbol') || 'NIFTY').toUpperCase()
+        const tf     = url.searchParams.get('tf') || '15m'
+        const days   = Math.min(Math.max(Number(url.searchParams.get('days')) || 365, 1), 6 * 365)
+        res.end(JSON.stringify({ symbol, tf, candles: await longHistory(symbol, tf, days) }))
+      } catch (e) {
+        res.statusCode = 502
+        res.end(JSON.stringify({ error: e.message }))
+      }
+    })
+
+    // ── NSE: daily index candles (fallback when Groww and Yahoo refuse) ────
+    server.middlewares.use('/api/nse-history', async (req, res) => {
+      res.setHeader('Content-Type', 'application/json')
+      res.setHeader('Cache-Control', 'no-cache')
+      try {
+        const url    = new URL(req.originalUrl, 'http://localhost')
+        const symbol = (url.searchParams.get('symbol') || 'NIFTY').toUpperCase()
+        res.end(JSON.stringify({ symbol, candles: await nseDailyCandles(symbol) }))
+      } catch (e) {
+        res.statusCode = 502
+        res.end(JSON.stringify({ error: e.message }))
+      }
+    })
+
     // ── Groww: historical candles ─────────────────────────────────────────
     server.middlewares.use('/api/groww/candles', async (req, res) => {
       res.setHeader('Content-Type', 'application/json')
@@ -348,8 +286,12 @@ const marketPlugin = {
       }
     })
 
+    // ── Order placement, positions, funds (paper + live Groww) ────────────
+    server.middlewares.use('/api/trade', tradingMiddleware)
+
     initNSESession()
     initYFSession()
+    startTrading()
     setInterval(() => refreshNSEData().catch(() => {}), 30_000)
     setInterval(initNSESession, 20 * 60_000)
     setInterval(initYFSession,  25 * 60_000)
@@ -359,8 +301,8 @@ const marketPlugin = {
 export default defineConfig(({ mode }) => {
   // Load .env (all vars, no prefix filter) so server-side Groww creds are available
   const env = loadEnv(mode, process.cwd(), '')
-  GROWW.apiKey = env.GROWW_API_KEY || ''
-  GROWW.secret = env.GROWW_API_SECRET || ''
+  configureGroww({ apiKey: env.GROWW_API_KEY, secret: env.GROWW_API_SECRET, totpToken: env.GROWW_TOTP_TOKEN, totpSecret: env.GROWW_TOTP_SECRET })
+  configureTrading(env)
 
   return {
   plugins: [react(), marketPlugin],

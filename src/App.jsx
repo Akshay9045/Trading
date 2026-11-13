@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { Toaster } from 'react-hot-toast'
 import { AppProvider } from './context/AppContext'
+import { TradingProvider } from './context/TradingContext'
 import Layout from './components/layout/Layout'
 import Dashboard from './pages/Dashboard'
 import LiveCharts from './pages/LiveCharts'
@@ -10,11 +11,13 @@ import AIPredictions from './pages/AIPredictions'
 import Sentiment from './pages/Sentiment'
 import WatchlistPage from './pages/WatchlistPage'
 import OptionsSignals from './pages/OptionsSignals'
+import Trade from './pages/Trade'
 
 function App() {
   return (
     <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <AppProvider>
+      <TradingProvider>
         <Toaster
           position="top-right"
           toastOptions={{
@@ -36,11 +39,13 @@ function App() {
             <Route path="/indicators" element={<Indicators />} />
             <Route path="/signals" element={<Signals />} />
             <Route path="/options" element={<OptionsSignals />} />
+            <Route path="/trade" element={<Trade />} />
             <Route path="/ai" element={<AIPredictions />} />
             <Route path="/sentiment" element={<Sentiment />} />
             <Route path="/watchlist" element={<WatchlistPage />} />
           </Route>
         </Routes>
+      </TradingProvider>
       </AppProvider>
     </BrowserRouter>
   )

@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { fetchCandles, fetchQuote, fetchOptionChain } from '../services/apiService'
 import { generateSignal } from '../services/signalEngine'
 import { runBacktest } from '../services/backtestEngine'
 import { calculateEMA } from '../utils/indicators'
+import { loadExpiries, subscribeExpiries, getNextExpiry, getMonthlyExpiry, getExpirySource } from '../services/optionsEngine'
 
 // Calibration: replace the engine's arbitrary "confidence" with the REAL win rate
 // measured by backtesting this same signal logic over the loaded candles. We attach
@@ -37,16 +38,31 @@ export const calibrateSignal = (signal, candles, signalOpts = {}) => {
   }
 }
 
+// Engine settings that always pick a side (CALL or PUT) instead of HOLD. The quality of
+// the pick is reported separately (backtested win rate + grade), never hidden.
+export const ALWAYS_SIGNAL_OPTS = { alwaysSignal: true, adxMin: 0, trendFilter: false, targetATR: 1, stopATR: 1 }
+
+// Like useMarketData, but `signal` is always BUY or SELL, calibrated by backtesting
+// the same always-signal rules (so its win rate describes exactly this pick).
+export const useDirectionalSignal = (symbol, timeframe = '1D') => {
+  const data = useMarketData(symbol, timeframe)
+  const signal = useMemo(() => {
+    if (!data.candles?.length) return null
+    return calibrateSignal(generateSignal(data.candles, ALWAYS_SIGNAL_OPTS), data.candles, ALWAYS_SIGNAL_OPTS)
+  }, [data.candles])
+  return { ...data, signal }
+}
+
 export const useMarketData = (symbol, timeframe = '1D') => {
   const [candles, setCandles] = useState([])
   const [quote, setQuote] = useState(null)
   const [signal, setSignal] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const abortRef = useRef(null)
+  const latestLoad = useRef(0)   // a slower earlier load must not overwrite a newer one
 
   const load = useCallback(async () => {
-    if (abortRef.current) abortRef.current = false
+    const loadId = ++latestLoad.current
     setLoading(true)
     setError(null)
 
@@ -56,7 +72,7 @@ export const useMarketData = (symbol, timeframe = '1D') => {
       fetchQuote(symbol),
     ])
 
-    if (abortRef.current) return
+    if (loadId !== latestLoad.current) return
 
     if (quoteResult.status === 'fulfilled') {
       setQuote(quoteResult.value)
@@ -66,6 +82,9 @@ export const useMarketData = (symbol, timeframe = '1D') => {
       setCandles(candleResult.value)
       setSignal(calibrateSignal(generateSignal(candleResult.value), candleResult.value))
     } else {
+      // Drop the previous load's candles: they may be a different timeframe or symbol
+      setCandles([])
+      setSignal(null)
       // Only show error if quote also failed — candle failure alone is non-fatal
       if (quoteResult.status === 'rejected') {
         setError(quoteResult.reason?.message || 'Failed to load market data')
@@ -82,9 +101,8 @@ export const useMarketData = (symbol, timeframe = '1D') => {
   // is what kept re-poking Groww's token endpoint during a rate-limit cooldown.
   // Use the returned `refresh` (the manual button) to pull fresh data on demand.
   useEffect(() => {
-    abortRef.current = false
     load()
-    return () => { abortRef.current = true }
+    return () => { latestLoad.current++ }
   }, [load])
 
   return { candles, quote, signal, loading, error, refresh: load }
@@ -95,16 +113,19 @@ export const useMarketData = (symbol, timeframe = '1D') => {
 // Returns null until loaded or if the chain is unavailable (engine then falls
 // back to estimated premiums).
 // `refreshKey` (optional) — pass a value that changes when the user clicks refresh
-// to re-pull the chain on demand. No auto-poll: the chain is fetched on mount and
-// on symbol/refreshKey change only, to avoid hammering Groww's token endpoint.
-export const useOptionChain = (symbol, spot, refreshKey = 0) => {
+// to re-pull the chain on demand. `pollMs` (optional) keeps the premiums current and
+// retries after a failure. The server pauses logins on its own, so polling can't
+// hammer Groww's token endpoint.
+export const useOptionChain = (symbol, spot, refreshKey = 0, pollMs = 0) => {
   const [chain, setChain] = useState(null)
+  const spotRef = useRef(spot)
+  spotRef.current = spot
 
   useEffect(() => {
     let active = true
     const load = async () => {
       try {
-        const data = await fetchOptionChain(symbol, spot)
+        const data = await fetchOptionChain(symbol, spotRef.current)
         if (active) setChain(data)
       } catch (err) {
         if (active) setChain(null)
@@ -112,10 +133,30 @@ export const useOptionChain = (symbol, spot, refreshKey = 0) => {
       }
     }
     load()
-    return () => { active = false }
-  }, [symbol, refreshKey])   // spot excluded — avoids refetch on every price tick
+    const id = pollMs ? setInterval(load, pollMs) : null
+    return () => { active = false; clearInterval(id) }
+  }, [symbol, refreshKey, pollMs])   // spot excluded — avoids refetch on every price tick
 
   return chain
+}
+
+// Next/monthly expiry for a symbol from Groww's instrument list. Re-renders the
+// caller once the real dates arrive; until then (or if the server is down) the
+// values are calculated and `source` is 'calculated'.
+export const useExpiries = (symbol) => {
+  const [, setVersion] = useState(0)
+
+  useEffect(() => {
+    const unsubscribe = subscribeExpiries(() => setVersion(v => v + 1))
+    loadExpiries(symbol)
+    return unsubscribe
+  }, [symbol])
+
+  return {
+    next:    getNextExpiry(symbol),
+    monthly: getMonthlyExpiry(symbol),
+    source:  getExpirySource(symbol),
+  }
 }
 
 // Daily-trend read for higher-timeframe alignment. Fetches 1D candles once and
