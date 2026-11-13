@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { fetchCandles, fetchQuote, fetchOptionChain } from '../services/apiService'
 import { generateSignal } from '../services/signalEngine'
 import { runBacktest } from '../services/backtestEngine'
@@ -36,6 +36,21 @@ export const calibrateSignal = (signal, candles, signalOpts = {}) => {
     expectancy:      enough ? parseFloat(dir.expectancy.toFixed(2)) : null,    // avg R per trade, after costs
     calibrated:      enough,
   }
+}
+
+// Engine settings that always pick a side (CALL or PUT) instead of HOLD. The quality of
+// the pick is reported separately (backtested win rate + grade), never hidden.
+export const ALWAYS_SIGNAL_OPTS = { alwaysSignal: true, adxMin: 0, trendFilter: false, targetATR: 1, stopATR: 1 }
+
+// Like useMarketData, but `signal` is always BUY or SELL, calibrated by backtesting
+// the same always-signal rules (so its win rate describes exactly this pick).
+export const useDirectionalSignal = (symbol, timeframe = '1D') => {
+  const data = useMarketData(symbol, timeframe)
+  const signal = useMemo(() => {
+    if (!data.candles?.length) return null
+    return calibrateSignal(generateSignal(data.candles, ALWAYS_SIGNAL_OPTS), data.candles, ALWAYS_SIGNAL_OPTS)
+  }, [data.candles])
+  return { ...data, signal }
 }
 
 export const useMarketData = (symbol, timeframe = '1D') => {

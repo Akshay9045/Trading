@@ -36,11 +36,14 @@ const YF_RANGE    = { '1m':'1d','5m':'5d','15m':'1mo','1h':'3mo','1D':'1y','1W':
 
 // ── Cache ──────────────────────────────────────────────────────────────────
 const cache = {}
+const inflight = {}   // key → pending promise, so simultaneous callers share one request
 const cached = (key, ttlMs, fn) => {
   const now = Date.now()
   const hit = cache[key]
   if (hit && now - hit.ts < ttlMs) return Promise.resolve(hit.data)
-  return fn()
+  if (inflight[key]) return inflight[key]
+  return (inflight[key] = fn()
+    .finally(() => { delete inflight[key] })
     .then(data => { cache[key] = { data, ts: now }; return data })
     .catch(err => {
       if (hit) {
@@ -52,7 +55,7 @@ const cached = (key, ttlMs, fn) => {
           : hit.data
       }
       throw err
-    })
+    }))
 }
 
 // ── NSE India — live quotes via Vite middleware ───────────────────────────

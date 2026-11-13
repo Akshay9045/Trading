@@ -229,14 +229,21 @@ const estimatePremium = (price, strike, daysToExpiry, type, vix = 10.2) => {
   return Math.max(5, Math.round(intrinsic + timeValue))
 }
 
-// Option target/SL from the underlying's move: premium ± delta × spot points.
+// Option buyers lose at most this share of the premium at the stop. Without a cap a
+// wide (Daily ATR) spot stop maps to a premium stop near ₹0 — i.e. no stop at all.
+export const MAX_PREMIUM_STOP_PCT = 0.35
+
+// Option target/SL from the underlying's move: premium ± delta × spot points,
+// with the stop capped at MAX_PREMIUM_STOP_PCT of the premium.
 const premiumExits = (premium, rawDelta, pointsTarget, pointsSL) => {
   const delta = rawDelta != null ? Math.abs(rawDelta) : 0.5
+  const capped = premium * (1 - MAX_PREMIUM_STOP_PCT)
   return {
     delta,
     deltaBasis:    rawDelta != null ? 'chain-delta' : 'approx-delta-0.5',
     premiumTarget: Math.max(premium + 1, Math.round(premium + delta * pointsTarget)),
-    premiumSL:     Math.max(1,           Math.round(premium - delta * pointsSL)),
+    premiumSL:     Math.max(1, Math.round(Math.max(capped, premium - delta * pointsSL))),
+    stopCapped:    premium - delta * pointsSL < capped,
   }
 }
 
@@ -256,13 +263,22 @@ export const getOptionPriceLevels = ({ symbol, spot, strike, optionType, pointsT
   return {
     premium, source: isLive ? 'live' : 'estimated', ...exits,
     premiumTarget: toTick(premium + exits.delta * pointsTarget),
-    premiumSL:     Math.max(0.05, toTick(premium - exits.delta * pointsSL)),
+    premiumSL:     Math.max(0.05, toTick(Math.max(premium * (1 - MAX_PREMIUM_STOP_PCT), premium - exits.delta * pointsSL))),
   }
 }
 
-// Professional conviction gate — backtested: only setups ≥65% confidence are net-positive.
-// Below this, a pro waits rather than overtrade mediocre signals.
+// Untested setups (too little history to backtest) need this formula score to grade OK.
 const MIN_CONVICTION = 65
+
+// How much to trust a pick. STRONG/OK need a positive backtested edge (or, untested,
+// a high formula score); everything else is WEAK — still shown, clearly labelled.
+const gradeSignal = ({ calibrated, expectancy, backtestWinRate, confidence }) => {
+  if (calibrated) {
+    if (expectancy != null && expectancy > 0) return backtestWinRate >= 50 ? 'STRONG' : 'OK'
+    return 'WEAK'
+  }
+  return confidence >= MIN_CONVICTION ? 'OK' : 'WEAK'
+}
 
 // Main function: converts a base signal into an options trade.
 // `optionChain` (optional) is the normalized chain from apiService.fetchOptionChain:
@@ -272,33 +288,26 @@ const MIN_CONVICTION = 65
 export const buildOptionsSignal = (baseSignal, symbol, quote, optionChain = null) => {
   if (!baseSignal || !quote) return null
 
-  const { type, entry, target, stopLoss, confidence, reasons, rrRatio, indicators,
+  const { type, entry: candleClose, target: candleTarget, stopLoss: candleStop, confidence, reasons, rrRatio, indicators,
           calibrated, expectancy, backtestWinRate, backtestSamples, bucketWinRate, bucketSamples } = baseSignal
 
-  // Gate: when the signal is calibrated (we have real backtest history), only trade
-  // setups with POSITIVE backtested expectancy after costs — that's the honest
-  // criterion, not an arbitrary confidence %. Without enough history, fall back to
-  // the old formula-confidence gate but flag it as untested.
-  const pass = type !== 'HOLD' && (
-    calibrated ? (expectancy != null && expectancy > 0) : confidence >= MIN_CONVICTION
-  )
-  if (!pass) {
-    return {
-      action: 'WAIT',
-      optionType: null,
-      symbol,
-      price: entry,
-      confidence,
-      calibrated, expectancy, backtestWinRate, backtestSamples, bucketWinRate, bucketSamples,
-      reasons,
-      indicators,
-      message: type === 'HOLD'
-        ? 'No directional bias — market consolidating. Wait for a breakout.'
-        : calibrated
-          ? `Backtested expectancy is ${expectancy} R/trade over ${backtestSamples} trades — historically this setup did not make money after costs. Waiting is the trade.`
-          : `Conviction ${confidence}% is below the ${MIN_CONVICTION}% threshold and there isn't enough history to backtest it yet. No high-quality setup right now.`,
-    }
-  }
+  // Always a CALL or PUT pick (callers pass an always-signal from useDirectionalSignal).
+  // A HOLD can only come from a caller using the filtered engine — no pick to show.
+  if (type !== 'BUY' && type !== 'SELL') return null
+
+  // The signal's levels are anchored on the last candle close (yesterday on the Daily).
+  // Re-anchor them on the live price so the strike and "buy at" are for the market now;
+  // the point distances to target and stop stay the same.
+  const live     = Number(quote?.price)
+  const entry    = Number.isFinite(live) && live > 0 ? live : candleClose
+  const shift    = entry - candleClose
+  const target   = candleTarget + shift
+  const stopLoss = candleStop + shift
+
+  // Win chance: the real backtested win rate when there's enough history, else the
+  // engine's formula score (labelled untested in the UI).
+  const grade     = gradeSignal({ calibrated, expectancy, backtestWinRate, confidence })
+  const winChance = calibrated && backtestWinRate != null ? backtestWinRate : confidence
 
   const optionType    = type === 'BUY' ? 'CALL' : 'PUT'
   const atm           = getATMStrike(entry, symbol)
@@ -336,7 +345,7 @@ export const buildOptionsSignal = (baseSignal, symbol, quote, optionChain = null
   // else ~0.5 for an ATM option. premium ≈ atmPremium ± delta × spot-move.
   const atmLeg     = optionChain?.strikes?.get?.(atm)
   const rawDelta   = atmLeg ? (optionType === 'CALL' ? atmLeg.callDelta : atmLeg.putDelta) : null
-  const { delta, deltaBasis, premiumTarget, premiumSL } = premiumExits(atmPremium, rawDelta, pointsTarget, pointsSL)
+  const { delta, deltaBasis, premiumTarget, premiumSL, stopCapped } = premiumExits(atmPremium, rawDelta, pointsTarget, pointsSL)
 
   return {
     action:         type === 'BUY' ? 'BUY CALL' : 'BUY PUT',
@@ -367,6 +376,7 @@ export const buildOptionsSignal = (baseSignal, symbol, quote, optionChain = null
     premiumTarget,
     premiumSL,
     premiumSource,                 // 'live' (real Groww LTP) or 'estimated'
+    stopCapped,                    // true when the stop was tightened to MAX_PREMIUM_STOP_PCT
     deltaBasis,                    // 'chain-delta' (real) or 'approx-delta-0.5'
     impliedVol: optionChain?.atmIV != null
       ? parseFloat(optionChain.atmIV.toFixed(1))
@@ -379,6 +389,9 @@ export const buildOptionsSignal = (baseSignal, symbol, quote, optionChain = null
     bucketWinRate,
     bucketSamples,
     expectancy,
+    grade,                         // 'STRONG' | 'OK' | 'WEAK'
+    winChance,                     // % — backtested when calibrated, else formula score
+    winChanceBasis: calibrated && backtestWinRate != null ? 'backtested' : 'untested',
 
     confidence,
     rrRatio,

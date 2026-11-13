@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import toast from 'react-hot-toast'
-import { useMarketData, useRealtimeQuote, useExpiries } from '../../hooks/useMarketData'
+import { useDirectionalSignal, useRealtimeQuote, useExpiries } from '../../hooks/useMarketData'
 import { buildOptionsSignal } from '../../services/optionsEngine'
 import { useTrading } from '../../context/TradingContext'
 
@@ -60,7 +60,7 @@ const isMarketHours = () => {
 
 const Watch = ({ symbol, enabled }) => {
   const { openTicket } = useTrading()
-  const { signal, refresh } = useMarketData(symbol, '1D')
+  const { signal, refresh } = useDirectionalSignal(symbol, '1D')
   const { quote } = useRealtimeQuote(symbol, 15000)
 
   useEffect(() => {
@@ -70,7 +70,9 @@ const Watch = ({ symbol, enabled }) => {
 
   useExpiries(symbol)   // re-render when Groww's real expiry dates arrive
   const opts = buildOptionsSignal(signal, symbol, quote)
-  const key = opts && opts.action !== 'WAIT' ? `${symbol}|${opts.action}|${opts.atmStrike}` : null
+  // The pick is always CALL or PUT now; only ring for picks with an edge (STRONG/OK),
+  // otherwise every flip of a WEAK pick would sound an alert.
+  const key = opts && opts.grade !== 'WEAK' ? `${symbol}|${opts.action}|${opts.atmStrike}` : null
 
   useEffect(() => {
     if (!enabled || !key || !isMarketHours()) return
@@ -83,7 +85,7 @@ const Watch = ({ symbol, enabled }) => {
 
     const side = opts.optionType === 'CALL' ? 'CE' : 'PE'
     const title = `${opts.action}: ${symbol} ${opts.atmStrike} ${side}`
-    const body = `Premium ~₹${opts.atmPremium} · SL ~₹${opts.premiumSL} · target ~₹${opts.premiumTarget}`
+    const body = `${opts.grade} · win ${opts.winChance}% · buy ₹${opts.atmPremium} · target ₹${opts.premiumTarget} · stop ₹${opts.premiumSL}`
     const prefill = ticketFromSignal(opts)
 
     beep()

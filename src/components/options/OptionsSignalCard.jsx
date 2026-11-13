@@ -1,7 +1,6 @@
 import { motion } from 'framer-motion'
-import { TrendingUp, TrendingDown, Target, Shield, Clock, AlertCircle, Zap, ArrowRight, ChevronRight } from 'lucide-react'
+import { TrendingUp, TrendingDown, Target, Shield, AlertCircle, Zap, ArrowRight, ChevronRight } from 'lucide-react'
 import GlassCard from '../ui/GlassCard'
-import Badge from '../ui/Badge'
 import { formatPrice } from '../../utils/formatters'
 
 // ── Small helper rows ────────────────────────────────────────────────────────
@@ -32,31 +31,16 @@ const StrikeChip = ({ label, strike, premium, active }) => (
   </div>
 )
 
-// ── WAIT card shown when signal is HOLD ─────────────────────────────────────
-const WaitCard = ({ signal, delay }) => (
-  <GlassCard delay={delay} className="p-6 border-hold/20 bg-hold/5">
-    <div className="flex items-center gap-3 mb-4">
-      <div className="w-10 h-10 rounded-xl bg-hold/15 border border-hold/25 flex items-center justify-center">
-        <Clock size={20} className="text-hold" />
-      </div>
-      <div>
-        <div className="text-xl font-black text-hold tracking-wide">WAIT</div>
-        <div className="text-xs text-gray-500">{signal.symbol} · No clear signal</div>
-      </div>
-      <Badge variant="hold" size="sm" className="ml-auto">HOLD</Badge>
-    </div>
-    <p className="text-sm text-gray-400 leading-relaxed">{signal.message}</p>
-    <div className="mt-4 flex items-center gap-2 text-xs text-gray-600">
-      <AlertCircle size={12} />
-      <span>Avoid trading in sideways/choppy market to protect capital</span>
-    </div>
-  </GlassCard>
-)
+// How much to trust the pick — shown on every card, never hidden behind a WAIT.
+export const GRADE_STYLE = {
+  STRONG: { cls: 'bg-bull/15 text-bull border-bull/30',   text: 'STRONG',  note: 'Positive backtested edge' },
+  OK:     { cls: 'bg-primary-500/15 text-primary-400 border-primary-500/30', text: 'OK', note: 'Small edge — normal size' },
+  WEAK:   { cls: 'bg-hold/15 text-hold border-hold/30',   text: 'WEAK',    note: 'No proven edge — trade small or skip' },
+}
 
 // ── Main options signal card ─────────────────────────────────────────────────
 const OptionsSignalCard = ({ optionsSignal, delay = 0 }) => {
   if (!optionsSignal) return null
-  if (optionsSignal.action === 'WAIT') return <WaitCard signal={optionsSignal} delay={delay} />
 
   const isCall = optionsSignal.optionType === 'CALL'
   const color  = isCall ? 'bull' : 'bear'
@@ -65,6 +49,8 @@ const OptionsSignalCard = ({ optionsSignal, delay = 0 }) => {
   const gradientClass  = isCall ? 'from-bull/8 to-bull/2'  : 'from-bear/8 to-bear/2'
   const accentColor    = isCall ? 'text-bull'               : 'text-bear'
   const accentBg       = isCall ? 'bg-bull/15 border-bull/25' : 'bg-bear/15 border-bear/25'
+  const grade          = GRADE_STYLE[optionsSignal.grade] || GRADE_STYLE.WEAK
+  const px             = (v) => `${optionsSignal.premiumSource === 'live' ? '' : '~'}₹${v}`
 
   return (
     <GlassCard
@@ -88,11 +74,27 @@ const OptionsSignalCard = ({ optionsSignal, delay = 0 }) => {
             </div>
           </div>
           <div className="text-right">
-            <div className="text-[10px] text-gray-600 uppercase tracking-wide">Confidence</div>
+            <div className="text-[10px] text-gray-600 uppercase tracking-wide">Win chance</div>
             <div className={`text-3xl font-black font-mono ${accentColor}`}>
-              {optionsSignal.confidence}%
+              {optionsSignal.winChance}%
+            </div>
+            <div className="text-[10px] text-gray-500 font-mono">
+              {optionsSignal.winChanceBasis === 'backtested'
+                ? `backtested · ${optionsSignal.backtestSamples} trades`
+                : 'formula score · untested'}
             </div>
           </div>
+        </div>
+
+        {/* Grade — how much to trust this pick */}
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className={`px-2.5 py-0.5 rounded-full border text-[11px] font-mono font-bold ${grade.cls}`}>{grade.text}</span>
+          <span className="text-[11px] text-gray-400">{grade.note}</span>
+          {optionsSignal.expectancy != null && (
+            <span className={`text-[11px] font-mono ml-auto ${optionsSignal.expectancy > 0 ? 'text-bull' : 'text-bear'}`}>
+              {optionsSignal.expectancy > 0 ? '+' : ''}{optionsSignal.expectancy} R/trade
+            </span>
+          )}
         </div>
 
         {/* Confidence bar */}
@@ -100,7 +102,7 @@ const OptionsSignalCard = ({ optionsSignal, delay = 0 }) => {
           <motion.div
             className={`h-full rounded-full ${isCall ? 'bg-bull' : 'bg-bear'}`}
             initial={{ width: 0 }}
-            animate={{ width: `${optionsSignal.confidence}%` }}
+            animate={{ width: `${optionsSignal.winChance}%` }}
             transition={{ duration: 1, delay: delay + 0.3, ease: 'easeOut' }}
           />
         </div>
@@ -142,10 +144,24 @@ const OptionsSignalCard = ({ optionsSignal, delay = 0 }) => {
         </div>
         <div className="text-xs text-gray-400 font-mono mt-1">
           Expiry: <span className="text-white font-bold">{optionsSignal.expiry}</span>
-          &nbsp;·&nbsp; Buy at: <span className={`font-bold ${accentColor}`}>~₹{optionsSignal.atmPremium}</span>
-          &nbsp;·&nbsp; Target: <span className="text-bull font-bold">~₹{optionsSignal.premiumTarget}</span>
-          &nbsp;·&nbsp; SL: <span className="text-bear font-bold">~₹{optionsSignal.premiumSL}</span>
         </div>
+        <div className="mt-2 grid grid-cols-3 gap-2 text-center">
+          <div className="rounded-lg bg-white/[0.04] py-1.5">
+            <div className="text-[10px] text-gray-500">BUY at</div>
+            <div className={`text-sm font-black font-mono ${accentColor}`}>{px(optionsSignal.atmPremium)}</div>
+          </div>
+          <div className="rounded-lg bg-white/[0.04] py-1.5">
+            <div className="text-[10px] text-gray-500">SELL at target</div>
+            <div className="text-sm font-black font-mono text-bull">{px(optionsSignal.premiumTarget)}</div>
+          </div>
+          <div className="rounded-lg bg-white/[0.04] py-1.5">
+            <div className="text-[10px] text-gray-500">SELL at stop</div>
+            <div className="text-sm font-black font-mono text-bear">{px(optionsSignal.premiumSL)}</div>
+          </div>
+        </div>
+        {optionsSignal.stopCapped && (
+          <div className="text-[10px] text-gray-500 mt-1.5">Stop tightened to lose at most 35% of the premium.</div>
+        )}
       </div>
 
       {/* ── Strike selection ── */}
