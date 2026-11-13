@@ -4,6 +4,7 @@ import https from 'https'
 import zlib from 'zlib'
 import { configureGroww, growwGet } from './server/groww.js'
 import { nseDailyCandles } from './server/nseHistory.js'
+import { longHistory } from './server/history.js'
 import { configureTrading, tradingMiddleware, startTrading } from './server/trading.js'
 
 const BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
@@ -176,6 +177,22 @@ const marketPlugin = {
         }))
       } catch (e) {
         res.statusCode = 503
+        res.end(JSON.stringify({ error: e.message }))
+      }
+    })
+
+    // ── Groww: long candle history for research/backtests (chunked, disk-cached) ──
+    server.middlewares.use('/api/groww/history', async (req, res) => {
+      res.setHeader('Content-Type', 'application/json')
+      res.setHeader('Cache-Control', 'no-cache')
+      try {
+        const url    = new URL(req.originalUrl, 'http://localhost')
+        const symbol = (url.searchParams.get('symbol') || 'NIFTY').toUpperCase()
+        const tf     = url.searchParams.get('tf') || '15m'
+        const days   = Math.min(Math.max(Number(url.searchParams.get('days')) || 365, 1), 6 * 365)
+        res.end(JSON.stringify({ symbol, tf, candles: await longHistory(symbol, tf, days) }))
+      } catch (e) {
+        res.statusCode = 502
         res.end(JSON.stringify({ error: e.message }))
       }
     })
