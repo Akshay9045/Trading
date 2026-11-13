@@ -20,7 +20,7 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000)
+Open [http://localhost:5174](http://localhost:5174)
 
 ## API Setup (Optional — runs in Demo Mode without keys)
 
@@ -46,12 +46,28 @@ VITE_USE_MOCK_DATA=false                  # Set to false to use real API
 - **Tailwind CSS** — styling with custom dark theme
 - **Lucide React** — icons
 
-## Deploy to Vercel
+## Deploy: Netlify (website) + Railway (API)
 
-```bash
-npm run build
-vercel --prod
+The website is static and goes on Netlify. Everything under `/api` (Groww, NSE,
+AI, orders, paper account) is a small Node server in `server/` that runs on Railway.
+Netlify forwards `/api/*` to Railway, so the browser only talks to the Netlify site.
+
 ```
+Browser ──▶ Netlify (dist/)  ──/api/*──▶  Railway: node server/index.js  (+ volume at /data)
+```
+
+**Railway** — New service → GitHub repo → this repo (builds `Dockerfile`, uses `railway.json`):
+1. Variables: `APP_PASSWORD` (required), `GROWW_API_KEY`, `GROWW_API_SECRET` (or the
+   `GROWW_TOTP_*` pair), `GROQ_API_KEY`, `TRADING_LIVE_ENABLED=false`, the `TRADE_*`
+   limits, and `ALLOWED_ORIGINS=https://<your-site>.netlify.app`
+2. Add a volume mounted at `/data` (paper account, caches, order brackets)
+3. Networking → Generate domain → copy the `https://….up.railway.app` URL
+
+**Netlify** — Add new site → import this repo (reads `netlify.toml`):
+1. Environment variable `API_ORIGIN` = the Railway URL from step 3
+2. Deploy. Open the site and sign in with `APP_PASSWORD`.
+
+Run the production server locally: `npm run build && APP_PASSWORD=test npm start` → http://localhost:8080
 
 ## Project Structure
 
