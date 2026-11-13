@@ -7,6 +7,7 @@
 import fs from 'fs'
 import path from 'path'
 import { growwGet } from './groww.js'
+import { dataPath } from './paths.js'
 
 const GROWW_SYMBOL = { NIFTY: 'NSE-NIFTY', BANKNIFTY: 'NSE-BANKNIFTY' }
 const INTERVALS = {                       // app timeframe → Groww interval + max days per request
@@ -15,7 +16,7 @@ const INTERVALS = {                       // app timeframe → Groww interval + 
   '1h':  { iv: '1hour',    maxDays: 180 },
   '1D':  { iv: '1day',     maxDays: 180 },
 }
-const CACHE_DIR = path.resolve(process.cwd(), '.cache', 'history')
+const CACHE_DIR = dataPath('history')
 const DAY = 86400_000
 
 // Groww wants exchange-local time (IST)

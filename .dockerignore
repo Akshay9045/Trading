@@ -1,0 +1,4 @@
+# The image only needs package.json + server/
+*
+!package.json
+!server/
