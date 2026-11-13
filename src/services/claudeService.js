@@ -52,11 +52,11 @@ Based on the above data, assess the trade and return ONLY this JSON (replace ALL
 {"signal":"YOUR_SIGNAL","optionType":"YOUR_OPTION","confidence":"YOUR_CONFIDENCE_INTEGER_55_TO_92","entryZone":"YOUR_ENTRY_PRICE","targetZone":"YOUR_TARGET_PRICE","stopLoss":"YOUR_STOPLOSS_PRICE","reasoning":"YOUR_2_TO_3_SENTENCE_REASONING","keyRisk":"YOUR_KEY_RISK_SENTENCE","agreesWithFormula":"true_or_false","sentiment":"YOUR_SENTIMENT","trendStrength":"YOUR_TREND_STRENGTH","indicators":{"rsiStatus":"YOUR_RSI_STATUS","macdStatus":"YOUR_MACD_STATUS","emaStatus":"YOUR_EMA_STATUS","bbStatus":"YOUR_BB_STATUS"}}
 
 Rules:
-- signal: exactly "BUY", "SELL", or "HOLD"
-- optionType: exactly "CALL", "PUT", or "WAIT"
-- confidence: integer between 55 and 92 — YOUR honest assessment, not a placeholder
+- signal: exactly "BUY" or "SELL" — always pick the more likely side. Never "HOLD"
+- optionType: exactly "CALL" (with BUY) or "PUT" (with SELL). Never "WAIT"
+- confidence: integer between 50 and 92 — YOUR honest probability that this side wins. When the evidence is mixed, still pick a side but give a LOW confidence (50–58) instead of refusing
 - entryZone/targetZone/stopLoss: index price levels near ₹${Math.round(price)}. ${atr ? `targetZone must be between ₹${(0.5 * atr).toFixed(0)} and ₹${(2 * atr).toFixed(0)} away from Price (0.5 to 2 ATR), on the profit side of your signal` : 'Keep them close to Price'}
-- Base every level only on the data above, such as the EMAs and Bollinger Bands. If the evidence is mixed, return signal "HOLD" and optionType "WAIT" rather than guessing
+- Base every level only on the data above, such as the EMAs and Bollinger Bands. Always give entryZone, targetZone and stopLoss for the side you picked: target on the profit side, stop on the loss side
 - agreesWithFormula: true or false (boolean)
 - sentiment: exactly "Bullish", "Bearish", or "Neutral"
 - trendStrength: exactly "Strong", "Moderate", or "Weak"`
@@ -132,6 +132,27 @@ const parseResponse = (raw) => {
   return parsed
 }
 
+// The app always shows a side. If a model still answers HOLD/WAIT (or contradicts
+// itself), pick its side from its own sentiment, then its target, then the formula —
+// and flag it so the UI can say the AI was undecided.
+const forceDirection = (parsed, formulaSignal, price) => {
+  const sideOf = (opt, sig) => (opt === 'CALL' || opt === 'PUT') ? opt : sig === 'BUY' ? 'CALL' : sig === 'SELL' ? 'PUT' : null
+  let side = sideOf(String(parsed.optionType || '').toUpperCase(), String(parsed.signal || '').toUpperCase())
+  const undecided = !side
+  if (!side && parsed.sentiment === 'Bullish') side = 'CALL'
+  if (!side && parsed.sentiment === 'Bearish') side = 'PUT'
+  if (!side && parsed.targetZone > 0 && price) side = parsed.targetZone >= price ? 'CALL' : 'PUT'
+  if (!side) side = formulaSignal?.type === 'SELL' ? 'PUT' : 'CALL'
+  return {
+    ...parsed,
+    optionType: side,
+    signal: side === 'CALL' ? 'BUY' : 'SELL',
+    undecided,
+    // An undecided model has no edge either way — never show more than a coin flip
+    confidence: undecided ? Math.min(parsed.confidence, 52) : parsed.confidence,
+  }
+}
+
 // ── Main export ────────────────────────────────────────────────────────────
 export const getClaudeAnalysis = async (symbol, indicators, formulaSignal, quote, timeframe = '1D') => {
   const provider = getActiveProvider()
@@ -158,7 +179,7 @@ export const getClaudeAnalysis = async (symbol, indicators, formulaSignal, quote
     else if (provider === 'groq') raw = await callGroq(prompt)
     else                          raw = await callAnthropic(prompt)
 
-    const parsed = parseResponse(raw)
+    const parsed = forceDirection(parseResponse(raw), formulaSignal, quote?.price || formulaSignal?.entry)
     return { ...parsed, provider, model: PROVIDER_INFO[provider].model, raw }
   } catch (err) {
     const status  = err.response?.status
