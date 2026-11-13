@@ -10,8 +10,9 @@ import path from 'path'
 import crypto from 'crypto'
 import { getOptionLtp } from './prices.js'
 import { todayIST } from './instruments.js'
+import { dataPath } from './paths.js'
 
-const STATE_PATH = path.resolve(process.cwd(), '.cache', 'paper-state.json')
+const STATE_PATH = dataPath('paper-state.json')
 
 let S = null
 let startingCapital = 100000

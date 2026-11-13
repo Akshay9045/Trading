@@ -5,7 +5,7 @@ import {
   TrendingUp, TrendingDown, Minus, Key, ExternalLink, Loader, Clock
 } from 'lucide-react'
 import { useMarketData, useRealtimeQuote, useOptionChain, useDailyTrend, useExpiries, calibrateSignal } from '../hooks/useMarketData'
-import { getClaudeAnalysis, isAIEnabled, getActiveProvider, PROVIDER_INFO } from '../services/claudeService'
+import { getClaudeAnalysis, isAIEnabled, getActiveProvider, loadAIStatus, PROVIDER_INFO } from '../services/claudeService'
 import { generateSignal } from '../services/signalEngine'
 import { getOptionPriceLevels, getATMStrike, getOTMStrike, getITMStrike } from '../services/optionsEngine'
 import GlassCard from '../components/ui/GlassCard'
@@ -64,7 +64,7 @@ const SetupCard = () => (
           limit: '1,500 calls/day · 15/min',
           url: 'https://aistudio.google.com',
           urlLabel: 'aistudio.google.com → Get API Key',
-          envKey: 'VITE_GEMINI_API_KEY',
+          envKey: 'GEMINI_API_KEY',
           example: 'AIzaSyXXXXXXXXXXXXXXXX',
           color: 'border-blue-500/20 bg-blue-500/5',
         },
@@ -75,7 +75,7 @@ const SetupCard = () => (
           limit: '6,000 calls/day · 30/min',
           url: 'https://console.groq.com',
           urlLabel: 'console.groq.com → API Keys → Create',
-          envKey: 'VITE_GROQ_API_KEY',
+          envKey: 'GROQ_API_KEY',
           example: 'gsk_XXXXXXXXXXXXXXXX',
           color: 'border-orange-500/20 bg-orange-500/5',
         },
@@ -86,7 +86,7 @@ const SetupCard = () => (
           limit: '~16,000 calls per $5',
           url: 'https://console.anthropic.com',
           urlLabel: 'console.anthropic.com → API Keys',
-          envKey: 'VITE_ANTHROPIC_API_KEY',
+          envKey: 'ANTHROPIC_API_KEY',
           example: 'sk-ant-api03-XXXXXX',
           color: 'border-white/10 bg-white/[0.02]',
         },
@@ -114,13 +114,13 @@ const SetupCard = () => (
     </div>
 
     <div className="bg-dark-300/80 rounded-xl p-4 font-mono text-xs border border-white/[0.06] mb-4">
-      <div className="text-gray-600 mb-2"># Paste into: /Users/akdhingra/Documents/Trading/.env</div>
-      <div className="text-gray-400">VITE_GEMINI_API_KEY=<span className="text-bull">your-key-here</span></div>
+      <div className="text-gray-600 mb-2"># Local: add to the project's .env · Deployed: add as a Railway variable</div>
+      <div className="text-gray-400">GROQ_API_KEY=<span className="text-bull">your-key-here</span></div>
     </div>
 
     <div className="flex items-center gap-2 text-xs text-hold">
       <AlertCircle size={12} />
-      After adding the key, restart the server: <code className="text-primary-400 bg-white/[0.06] px-1.5 py-0.5 rounded">npm run dev</code>
+      After adding the key, restart the server (<code className="text-primary-400 bg-white/[0.06] px-1.5 py-0.5 rounded">npm run dev</code> locally; Railway redeploys by itself). Keys stay on the server, never in the website.
     </div>
   </GlassCard>
 )
@@ -728,6 +728,9 @@ const SymbolAnalysis = ({ symbol, autoRun }) => {
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 const AIPredictions = () => {
+  // The server says which AI provider it has a key for (keys never reach the browser)
+  const [, setAiStatusLoaded] = useState(false)
+  useEffect(() => { loadAIStatus().then(() => setAiStatusLoaded(true)) }, [])
   const hasKey   = isAIEnabled()
   const provider = getActiveProvider()
   const provInfo = provider ? PROVIDER_INFO[provider] : null

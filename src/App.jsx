@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { Toaster } from 'react-hot-toast'
 import { AppProvider } from './context/AppContext'
+import AuthGate from './components/auth/AuthGate'
 import { TradingProvider } from './context/TradingContext'
 import Layout from './components/layout/Layout'
 import Dashboard from './pages/Dashboard'
@@ -16,6 +17,7 @@ import Trade from './pages/Trade'
 function App() {
   return (
     <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <AuthGate>
       <AppProvider>
       <TradingProvider>
         <Toaster
@@ -47,6 +49,7 @@ function App() {
         </Routes>
       </TradingProvider>
       </AppProvider>
+      </AuthGate>
     </BrowserRouter>
   )
 }
