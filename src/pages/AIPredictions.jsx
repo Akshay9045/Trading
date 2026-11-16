@@ -7,7 +7,7 @@ import {
 import { useMarketData, useRealtimeQuote, useOptionChain, useDailyTrend, useExpiries, calibrateSignal } from '../hooks/useMarketData'
 import { getClaudeAnalysis, isAIEnabled, getActiveProvider, loadAIStatus, PROVIDER_INFO } from '../services/claudeService'
 import { generateSignal } from '../services/signalEngine'
-import { getATMStrike, getOTMStrike, getITMStrike, getNextExpiryISO } from '../services/optionsEngine'
+import { getATMStrike, getNextExpiryISO } from '../services/optionsEngine'
 import { planTrade } from '../services/tradePlan'
 import { logAICall, scoreAICalls, getAIRecord } from '../services/aiTrackRecord'
 import GlassCard from '../components/ui/GlassCard'
@@ -168,7 +168,7 @@ const ErrorCard = ({ error }) => (
 // The trade is the ENGINE's side, at levels sized to the time left before expiry
 // (services/tradePlan). The headline number is the backtested win rate of exactly
 // those levels; the AI is a second opinion that must agree before a trade shows.
-const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, plan, record, delay = 0 }) => {
+const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, plan, aiPlan, record, delay = 0 }) => {
   const { next: weeklyExpiry, monthly: monthlyExpiry } = useExpiries(symbol)   // real dates from Groww
   if (!result || result.error) return null
 
@@ -181,15 +181,6 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, plan, reco
   const isCallSide = cardDir === 'CALL'
   const color      = isCallSide ? 'bull' : 'bear'
   const Icon       = isCallSide ? TrendingUp : TrendingDown
-  const sideSuffix = isCallSide ? 'CE' : 'PE'
-
-  // Live market premium (LTP) for a strike, correct leg for the card's side
-  const legPremium = (strike) => {
-    const leg = chain?.strikes?.get?.(strike)
-    if (!leg) return null
-    const ltp = isCallSide ? leg.callLtp : leg.putLtp
-    return ltp != null && ltp > 0 ? ltp : null
-  }
 
   const entryPx    = livePrice || signal?.entry || 0
   const tgtDist    = plan?.targetPts ?? (signal ? Math.abs(signal.target - signal.entry) : 0)
@@ -205,25 +196,14 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, plan, reco
   const zoneLo  = hasZone ? Math.min(e9, e20) : null
   const zoneHi  = hasZone ? Math.max(e9, e20) : null
   const atmStrike  = entryPx ? getATMStrike(entryPx, symbol) : null
-  const itmStrike  = entryPx ? getITMStrike(entryPx, symbol, cardDir) : null
-  const otmStrike  = entryPx ? getOTMStrike(entryPx, symbol, cardDir) : null
-  const optLive    = plan?.premium != null && legPremium(atmStrike) != null && !chain?._stale
 
-  // The AI's own index target as a premium: same delta, same time decay as the plan
-  const aiTgtPts    = result.targetZone > 0 ? (isCallSide ? result.targetZone - entryPx : entryPx - result.targetZone) : 0
-  const aiOptTarget = optLive && agrees && aiTgtPts > 0
-    ? Math.round((plan.premium + plan.delta * Math.min(aiTgtPts, plan.reachableMove) - plan.decay) * 20) / 20
-    : null
-  const aiIndexTgt  = result.targetZone > 0 ? `index ₹${Math.round(result.targetZone).toLocaleString('en-IN')}` : null
-
-  // Every reason this is NOT a trade right now. Any one blocks the Buy levels.
+  // Warnings on the backtest trade. Shown on the card; they don't hide the levels.
   const blocks = []
   if (!signal) blocks.push('No chart data for the engine')
   else if (!signal.calibrated) blocks.push('Not enough history to test these levels')
   if (grade && grade.tone === 'bear') blocks.push(grade.label.includes('negative')
     ? `Backtest of these levels loses money (${signal.expectancy} R/trade)`
     : grade.label.includes('counter') ? 'Against the Daily trend' : 'Weak setup')
-  if (engDir && !agrees) blocks.push(`AI disagrees: it picks ${aiDir}`)
   if (plan && !plan.ok) blocks.push(...plan.reasons)
   const isTrade = blocks.length === 0
 
@@ -253,8 +233,9 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, plan, reco
               <Icon size={22} className={`text-${color}`} />
             </div>
             <div>
-              <div className={`text-2xl font-black tracking-widest ${isTrade ? `text-${color}` : 'text-gray-500'}`}>
-                {isTrade ? `BUY ${cardDir}` : 'NO TRADE'}
+              <div className={`text-2xl font-black tracking-widest text-${color}`}>
+                {`BUY ${cardDir}`}
+                {!isTrade && <span className="ml-2 text-[11px] tracking-normal text-bear align-middle">· risky, see warnings</span>}
               </div>
               <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                 <span className="text-xs text-gray-500 font-mono">{symbol}</span>
@@ -310,84 +291,89 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, plan, reco
       {/* Price levels — from the trade plan (ATR, capped by the move possible before expiry) */}
       <div className="p-5 border-b border-white/[0.06]">
         {atmStrike ? (
-          <div className={`mb-4 rounded-xl border p-3
-            ${!isTrade ? 'bg-white/[0.03] border-white/10' : isCallSide ? 'bg-bull/10 border-bull/30' : 'bg-bear/10 border-bear/30'}`}>
-            <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1 flex items-center gap-1.5">
-              {isTrade ? 'Buy This Option' : 'Option (not a trade now)'}
-              {grade && <span className={`font-bold text-${grade.tone}`}>· {grade.label}</span>}
-            </div>
-            <div className={`text-lg font-black font-mono ${!isTrade ? 'text-gray-400' : isCallSide ? 'text-bull' : 'text-bear'}`}>
-              {symbol} {atmStrike} {sideSuffix}
-              {optLive && (
-                <span className="text-sm text-white"> @ ₹{plan.premium.toFixed(2)} <span className="text-[10px] text-bull">(live)</span></span>
-              )}
-            </div>
-            {!optLive && (
-              <div className="text-[10px] text-gray-500 mt-1">Waiting for the live option price… it updates by itself within 10 seconds.</div>
-            )}
-
-            {!isTrade && (
-              <div className="mt-2 rounded-lg bg-bear/8 border border-bear/20 px-3 py-2">
-                <div className="text-[11px] font-bold text-bear mb-1">No trade — Buy / Target / Stop are hidden because:</div>
-                <ul className="text-[11px] text-gray-400 list-disc ml-4 space-y-0.5">
-                  {blocks.map(b => <li key={b}>{b}</li>)}
-                </ul>
-              </div>
-            )}
-
-            {isTrade && optLive && (
-              <>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3">
-                  {[
-                    { label: 'Buy',       value: plan.premium,       cls: 'text-white' },
-                    { label: 'Target',    value: plan.premiumTarget, cls: 'text-bull',
-                      note: `${Math.round(plan.targetPts)} pts${plan.decay ? ` · −₹${plan.decay.toFixed(2)} decay` : ''}` },
-                    { label: 'Stop Loss', value: plan.premiumSL,     cls: 'text-bear', note: `${Math.round(plan.stopPts)} pts` },
-                    { label: 'AI Target', value: aiOptTarget,        cls: 'text-primary-300',
-                      note: aiOptTarget == null ? 'AI gave no target on this side' : `${aiIndexTgt} · capped to realistic` },
-                  ].map(l => (
-                    <div key={l.label} className="rounded-xl py-2.5 text-center bg-white/[0.05] border border-white/10">
-                      <div className="text-[10px] text-gray-500 uppercase tracking-wide mb-0.5">{l.label}</div>
-                      <div className={`text-xl font-black font-mono ${l.cls}`}>{l.value != null ? `₹${l.value.toFixed(2)}` : '—'}</div>
-                      {l.note && <div className="text-[9px] text-gray-600 mt-0.5">{l.note}</div>}
+          <div className="mb-4 grid grid-cols-1 gap-3">
+            {[
+              {
+                key: 'bt', title: 'Backtest trade', side: cardDir, p: plan,
+                tag: grade?.label, tagTone: grade?.tone,
+                pct: tested, pctLabel: 'tested win',
+                sub: signal?.calibrated
+                  ? `${signal.expectancy} R/trade · ${signal.backtestSamples} past trades`
+                  : 'not enough history to test',
+                warn: blocks,
+              },
+              {
+                key: 'ai', title: `AI trade · ${aiName}`, side: aiDir, p: aiPlan,
+                tag: agrees ? 'agrees with backtest' : 'disagrees with backtest', tagTone: agrees ? 'bull' : 'hold',
+                pct: result.confidence, pctLabel: 'AI says',
+                sub: record?.scored
+                  ? `AI record ${record.aiRight}/${record.scored} right (${record.aiRate}%)`
+                  : 'AI % is its own guess · no scored record yet',
+                warn: aiPlan && !aiPlan.ok ? aiPlan.reasons : [],
+              },
+            ].map(t => {
+              const call = t.side === 'CALL'
+              const live = t.p?.premium != null && !chain?._stale
+              return (
+                <div key={t.key} className={`rounded-xl border p-3 ${call ? 'bg-bull/10 border-bull/30' : 'bg-bear/10 border-bear/30'}`}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="text-[10px] text-gray-500 uppercase tracking-wider flex items-center gap-1.5 flex-wrap">
+                        {t.title}
+                        {t.tag && <span className={`font-bold text-${t.tagTone}`}>· {t.tag}</span>}
+                      </div>
+                      <div className={`text-lg font-black font-mono ${call ? 'text-bull' : 'text-bear'}`}>
+                        BUY {symbol} {atmStrike} {call ? 'CE' : 'PE'}
+                      </div>
                     </div>
-                  ))}
-                </div>
-                <div className="text-[10px] text-gray-500 mt-1.5 leading-snug">
-                  Target is capped at {Math.round(plan.reachableMove)} pts — the move NIFTY reaches about half the time in the next {plan.holdBars} candle{plan.holdBars > 1 ? 's' : ''} (IV {(plan.iv * 100).toFixed(1)}%). Exit by then if neither level is hit.
-                </div>
-              </>
-            )}
-
-            {/* 3 strikes */}
-            <div className="flex gap-2 mt-2">
-              {[
-                { label: 'ITM', strike: itmStrike },
-                { label: 'ATM ✓', strike: atmStrike, active: true },
-                { label: 'OTM', strike: otmStrike },
-              ].map(s => (
-                <div key={s.label} className={`flex-1 rounded-lg py-2 text-center border text-xs font-mono
-                  ${s.active && isTrade
-                    ? (isCallSide ? 'bg-bull/15 border-bull/40 text-bull font-bold' : 'bg-bear/15 border-bear/40 text-bear font-bold')
-                    : 'bg-white/[0.04] border-white/10 text-gray-400'}`}>
-                  <div className="text-[9px] text-gray-600 mb-0.5">{s.label}</div>
-                  {s.strike} {sideSuffix}
-                  {legPremium(s.strike) != null && (
-                    <div className="text-[10px] text-gray-300 mt-0.5">₹{legPremium(s.strike).toFixed(2)}</div>
+                    <div className="text-right flex-shrink-0">
+                      <div className="text-[9px] text-gray-600 uppercase">{t.pctLabel}</div>
+                      <div className={`text-2xl font-black font-mono ${t.pct == null ? 'text-gray-500' : t.pct >= 55 ? 'text-bull' : t.pct >= 50 ? 'text-hold' : 'text-bear'}`}>
+                        {t.pct != null ? `${t.pct}%` : '—'}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="text-[10px] text-gray-500 font-mono">{t.sub}</div>
+                  {live ? (
+                    <div className="grid grid-cols-3 gap-2 mt-2">
+                      {[
+                        { label: 'Buy',       value: t.p.premium,       cls: 'text-white' },
+                        { label: 'Target',    value: t.p.premiumTarget, cls: 'text-bull', note: `${Math.round(t.p.targetPts)} pts` },
+                        { label: 'Stop Loss', value: t.p.premiumSL,     cls: 'text-bear', note: `${Math.round(t.p.stopPts)} pts` },
+                      ].map(l => (
+                        <div key={l.label} className="rounded-xl py-2 text-center bg-white/[0.05] border border-white/10">
+                          <div className="text-[10px] text-gray-500 uppercase tracking-wide">{l.label}</div>
+                          <div className={`text-lg font-black font-mono ${l.cls}`}>{l.value != null ? `₹${l.value.toFixed(2)}` : '—'}</div>
+                          {l.note && <div className="text-[9px] text-gray-600">{l.note}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-[10px] text-gray-500 mt-1">Waiting for the live option price… it updates by itself within 10 seconds.</div>
+                  )}
+                  {t.warn.length > 0 && (
+                    <div className="mt-2 text-[10px] text-bear leading-snug">
+                      ⚠️ {t.warn.join(' · ')}
+                    </div>
                   )}
                 </div>
-              ))}
-            </div>
+              )
+            })}
+            {plan && (
+              <div className="text-[10px] text-gray-500 leading-snug">
+                Targets are capped at {Math.round(plan.reachableMove)} pts — the move NIFTY reaches about half the time in the next {plan.holdBars} candle{plan.holdBars > 1 ? 's' : ''} (IV {(plan.iv * 100).toFixed(1)}%), with time decay taken off. Exit by then if neither level is hit.
+              </div>
+            )}
           </div>
         ) : null}
         <div className="text-[10px] text-gray-600 uppercase tracking-wider mb-2">
-          Index levels · {cardDir} <span className="text-gray-700">· {isTrade ? 'the tested levels' : 'for reference only'}</span>
+          Index levels · backtest trade · {cardDir}
         </div>
         <div className="grid grid-cols-3 gap-3">
           {[
             { label: 'Entry (≈ live)', value: dispEntry,  cls: 'text-white' },
-            { label: 'Target',         value: dispTarget, cls: isTrade ? 'text-bull' : 'text-gray-500' },
-            { label: 'Stop Loss',      value: dispStop,   cls: isTrade ? 'text-bear' : 'text-gray-500' },
+            { label: 'Target',         value: dispTarget, cls: 'text-bull' },
+            { label: 'Stop Loss',      value: dispStop,   cls: 'text-bear' },
           ].map(item => (
             <div key={item.label}
               className="bg-white/[0.04] rounded-xl p-3 text-center border border-white/[0.05]">
@@ -477,7 +463,7 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, plan, reco
           variant={agrees ? 'bull' : 'hold'}
           size="sm"
         >
-          {agrees ? '✓ Both Agree' : '⚡ AI Disagrees — no trade'}
+          {agrees ? '✓ Both Agree' : '⚡ AI Disagrees'}
         </Badge>
       </div>
     </GlassCard>
@@ -574,6 +560,8 @@ const SymbolAnalysis = ({ symbol, autoRun }) => {
   const quote                 = liveQuote || marketQuote
   const chain                 = useOptionChain(symbol, quote?.price, 0, 10_000)   // live option premiums
 
+  const [aiResult, setAiResult]  = useState(null)
+
   // 1) The engine's side and ATR, on the default 1 ATR levels.
   //    On intraday timeframes it follows the Daily trend; the Daily view has none above it.
   const baseOpts = useMemo(() => ({
@@ -610,13 +598,26 @@ const SymbolAnalysis = ({ symbol, autoRun }) => {
     return calibrateSignal(generateSignal(candles, opts), candles, opts, { horizon })
   }, [candles, strictSignal, baseOpts, tgtMult, slMult, horizon])
 
+  // The AI's own trade: its side and its index target/stop, run through the same
+  // realistic caps (target ≤ reachable move, stop ≤ 35% of premium, decay included)
+  const aiSide   = aiResult && !aiResult.error ? (aiResult.optionType === 'PUT' ? 'PUT' : 'CALL') : null
+  const atrVal   = baseSignal ? (baseSignal.indicators?.atr || Math.abs(baseSignal.target - baseSignal.entry)) : null
+  const aiLegLtp = leg && aiSide ? (aiSide === 'CALL' ? leg.callLtp : leg.putLtp) : null
+  const aiLegDel = leg && aiSide ? (aiSide === 'CALL' ? leg.callDelta : leg.putDelta) : null
+  const aiTgtPts = aiSide && aiResult.targetZone > 0 && spot ? (aiSide === 'CALL' ? aiResult.targetZone - spot : spot - aiResult.targetZone) : 0
+  const aiSlPts  = aiSide && aiResult.stopLoss > 0 && spot ? (aiSide === 'CALL' ? spot - aiResult.stopLoss : aiResult.stopLoss - spot) : 0
+  const aiPlan = useMemo(() => (aiSide && atrVal ? planTrade({
+    spot, atr: atrVal, premium: aiLegLtp, delta: aiLegDel, strike: atm, side: aiSide,
+    iv: chain?.atmIV ?? quote?.vix, expiryISO, timeframe,
+    targetATR: aiTgtPts > 0 ? aiTgtPts / atrVal : 1, stopATR: aiSlPts > 0 ? aiSlPts / atrVal : 1,
+  }) : null), [aiSide, atrVal, spot, aiLegLtp, aiLegDel, atm, chain?.atmIV, quote?.vix, expiryISO, timeframe, aiTgtPts, aiSlPts])
+
   // AI track record: score past calls against the candles that came after them
   const [record, setRecord] = useState(() => getAIRecord(symbol))
   useEffect(() => {
     scoreAICalls(symbol, timeframe, candles)
     setRecord(getAIRecord(symbol))
   }, [symbol, timeframe, candles])
-  const [aiResult, setAiResult]  = useState(null)
   const [aiLoading, setAiLoading] = useState(false)
   const [errorMsg, setErrorMsg]  = useState(null)
   const [callCount, setCallCount] = useState(0)
@@ -755,6 +756,7 @@ const SymbolAnalysis = ({ symbol, autoRun }) => {
           signal={signal}
           chain={chain}
           plan={plan}
+          aiPlan={aiPlan}
           record={record}
           delay={0}
         />
