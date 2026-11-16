@@ -168,7 +168,7 @@ const ErrorCard = ({ error }) => (
 // The trade is the ENGINE's side, at levels sized to the time left before expiry
 // (services/tradePlan). The headline number is the backtested win rate of exactly
 // those levels; the AI is a second opinion that must agree before a trade shows.
-const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, plan, aiPlan, record, delay = 0 }) => {
+const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, plan, aiPlan, record, view = 'bt', delay = 0 }) => {
   const { next: weeklyExpiry, monthly: monthlyExpiry } = useExpiries(symbol)   // real dates from Groww
   if (!result || result.error) return null
 
@@ -176,15 +176,17 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, plan, aiPl
   const grade      = gradeTrade(signal)
   const engDir     = grade ? grade.dir : null
   const aiDir      = result.optionType === 'PUT' ? 'PUT' : 'CALL'
-  const cardDir    = engDir || aiDir
+  const isAI       = view === 'ai'                     // which trade the card shows (chosen above)
+  const cardDir    = isAI ? aiDir : (engDir || aiDir)
+  const selPlan    = isAI ? aiPlan : plan
   const agrees     = engDir === aiDir
   const isCallSide = cardDir === 'CALL'
   const color      = isCallSide ? 'bull' : 'bear'
   const Icon       = isCallSide ? TrendingUp : TrendingDown
 
   const entryPx    = livePrice || signal?.entry || 0
-  const tgtDist    = plan?.targetPts ?? (signal ? Math.abs(signal.target - signal.entry) : 0)
-  const slDist     = plan?.stopPts   ?? (signal ? Math.abs(signal.entry - signal.stopLoss) : 0)
+  const tgtDist    = selPlan?.targetPts ?? (signal ? Math.abs(signal.target - signal.entry) : 0)
+  const slDist     = selPlan?.stopPts   ?? (signal ? Math.abs(signal.entry - signal.stopLoss) : 0)
   const dispEntry  = entryPx
   const dispTarget = isCallSide ? entryPx + tgtDist : entryPx - tgtDist
   const dispStop   = isCallSide ? entryPx - slDist  : entryPx + slDist
@@ -205,7 +207,8 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, plan, aiPl
     ? `Backtest of these levels loses money (${signal.expectancy} R/trade)`
     : grade.label.includes('counter') ? 'Against the Daily trend' : 'Weak setup')
   if (plan && !plan.ok) blocks.push(...plan.reasons)
-  const isTrade = blocks.length === 0
+  const aiWarn = [...(engDir && !agrees ? [`Backtest picks ${engDir}`] : []), ...(aiPlan && !aiPlan.ok ? aiPlan.reasons : [])]
+  const isTrade = (isAI ? aiWarn : blocks).length === 0
 
   const tested = signal?.calibrated ? signal.backtestWinRate : null
 
@@ -235,6 +238,7 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, plan, aiPl
             <div>
               <div className={`text-2xl font-black tracking-widest text-${color}`}>
                 {`BUY ${cardDir}`}
+                <span className="ml-2 text-[10px] tracking-normal text-gray-500 align-middle">{isAI ? 'AI trade' : 'backtest trade'}</span>
                 {!isTrade && <span className="ml-2 text-[11px] tracking-normal text-bear align-middle">· risky, see warnings</span>}
               </div>
               <div className="flex items-center gap-2 mt-0.5 flex-wrap">
@@ -250,15 +254,27 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, plan, aiPl
             </div>
           </div>
           <div className="text-right flex-shrink-0">
-            <div className="text-[10px] text-gray-600 uppercase tracking-wide">Tested win rate</div>
-            <div className={`text-3xl font-black font-mono ${tested == null ? 'text-gray-500' : tested >= 50 ? 'text-bull' : 'text-hold'}`}>
-              {tested != null ? `${tested}%` : '—'}
-            </div>
-            <div className="text-[9px] text-gray-600 font-mono">
-              {signal?.calibrated
-                ? <>{signal.expectancy} R/trade · n={signal.backtestSamples}</>
-                : 'untested'}
-            </div>
+            {isAI ? (
+              <>
+                <div className="text-[10px] text-gray-600 uppercase tracking-wide">AI says</div>
+                <div className={`text-3xl font-black font-mono ${result.confidence >= 55 ? 'text-bull' : 'text-hold'}`}>{result.confidence}%</div>
+                <div className="text-[9px] text-gray-600 font-mono">
+                  {record?.scored ? <>record {record.aiRight}/{record.scored} right ({record.aiRate}%)</> : 'its own guess · no record yet'}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="text-[10px] text-gray-600 uppercase tracking-wide">Tested win rate</div>
+                <div className={`text-3xl font-black font-mono ${tested == null ? 'text-gray-500' : tested >= 50 ? 'text-bull' : 'text-hold'}`}>
+                  {tested != null ? `${tested}%` : '—'}
+                </div>
+                <div className="text-[9px] text-gray-600 font-mono">
+                  {signal?.calibrated
+                    ? <>{signal.expectancy} R/trade · n={signal.backtestSamples}</>
+                    : 'untested'}
+                </div>
+              </>
+            )}
           </div>
         </div>
 
@@ -311,7 +327,7 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, plan, aiPl
                   : 'AI % is its own guess · no scored record yet',
                 warn: aiPlan && !aiPlan.ok ? aiPlan.reasons : [],
               },
-            ].map(t => {
+            ].filter(t => t.key === view).map(t => {
               const call = t.side === 'CALL'
               const live = t.p?.premium != null && !chain?._stale
               return (
@@ -367,7 +383,7 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, plan, aiPl
           </div>
         ) : null}
         <div className="text-[10px] text-gray-600 uppercase tracking-wider mb-2">
-          Index levels · backtest trade · {cardDir}
+          Index levels · {isAI ? 'AI' : 'backtest'} trade · {cardDir}
         </div>
         <div className="grid grid-cols-3 gap-3">
           {[
@@ -471,7 +487,7 @@ const ClaudeResultCard = ({ result, symbol, livePrice, signal, chain, plan, aiPl
 }
 
 // ── Engine (math, backtested) vs AI (LLM opinion) — side by side ──────────────
-const EngineVsAI = ({ signal, aiResult, record }) => {
+const EngineVsAI = ({ signal, aiResult, record, view = 'bt', onSelect }) => {
   // Always-trade: show the graded directional pick (Strong / Moderate / Weak / Avoid)
   const g = gradeTrade(signal)
   const eng = (signal && g)
@@ -492,7 +508,9 @@ const EngineVsAI = ({ signal, aiResult, record }) => {
   return (
     <div className="grid grid-cols-2 gap-3">
       {/* Engine — the trustworthy, backtested one */}
-      <div className={`rounded-xl border border-${displayColor}/40 bg-${displayColor}/10 p-4`}>
+      <button type="button" onClick={() => onSelect?.('bt')} aria-pressed={view === 'bt'}
+        className={`text-left rounded-xl border border-${displayColor}/40 bg-${displayColor}/10 p-4 transition-all
+          ${view === 'bt' ? 'ring-2 ring-primary-400/70' : 'opacity-70 hover:opacity-100'}`}>
         <div className="flex items-center gap-1.5 mb-1.5">
           <span className="text-[10px] font-bold text-bull uppercase tracking-wider">✓ Engine</span>
           <span className="text-[9px] text-gray-500">backtested · trust this</span>
@@ -520,13 +538,16 @@ const EngineVsAI = ({ signal, aiResult, record }) => {
         ) : signal ? (
           <div className="mt-1.5 text-[10px] text-gray-600 font-mono">not enough history to backtest yet</div>
         ) : null}
-      </div>
+        <div className="mt-2 text-[9px] text-primary-400">{view === 'bt' ? '▼ showing below' : 'Tap to show this trade'}</div>
+      </button>
 
       {/* AI — opinion only, unvalidated */}
-      <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+      <button type="button" onClick={() => ai && onSelect?.('ai')} disabled={!ai} aria-pressed={view === 'ai'}
+        className={`text-left rounded-xl border border-white/10 bg-white/[0.03] p-4 transition-all disabled:cursor-not-allowed
+          ${view === 'ai' ? 'ring-2 ring-primary-400/70' : 'opacity-70 hover:opacity-100'}`}>
         <div className="flex items-center gap-1.5 mb-1.5">
           <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">AI vote</span>
-          <span className="text-[9px] text-gray-500">must agree for a trade</span>
+          <span className="text-[9px] text-gray-500">second opinion</span>
         </div>
         <div className="text-2xl font-black text-gray-400">{ai ? ai.action : '—'}</div>
         <div className="text-xs text-gray-500 mt-1">
@@ -534,7 +555,8 @@ const EngineVsAI = ({ signal, aiResult, record }) => {
             ? <><span className={`font-bold ${record.aiRate >= 50 ? 'text-bull' : 'text-bear'}`}>{record.aiRate}% right</span> <span className="text-gray-600">· {record.scored} scored calls</span></>
             : <span className="text-gray-600">{ai ? 'no scored calls yet' : 'not run yet'}</span>}
         </div>
-      </div>
+        {ai && <div className="mt-2 text-[9px] text-primary-400">{view === 'ai' ? '▼ showing below' : 'Tap to show this trade'}</div>}
+      </button>
     </div>
   )
 }
@@ -561,6 +583,7 @@ const SymbolAnalysis = ({ symbol, autoRun }) => {
   const chain                 = useOptionChain(symbol, quote?.price, 0, 10_000)   // live option premiums
 
   const [aiResult, setAiResult]  = useState(null)
+  const [view, setView]          = useState('bt')   // which trade the card shows: backtest or AI
 
   // 1) The engine's side and ATR, on the default 1 ATR levels.
   //    On intraday timeframes it follows the Daily trend; the Daily view has none above it.
@@ -744,7 +767,7 @@ const SymbolAnalysis = ({ symbol, autoRun }) => {
       )}
 
       {/* Engine vs AI — the real (math) verdict next to the LLM's opinion */}
-      {(signal || aiResult) && <EngineVsAI signal={signal} aiResult={aiResult} record={record} />}
+      {(signal || aiResult) && <EngineVsAI signal={signal} aiResult={aiResult} record={record} view={view} onSelect={setView} />}
 
       {aiLoading && <ThinkingBar symbol={symbol} />}
       {errorMsg  && <ErrorCard error={errorMsg} />}
@@ -758,6 +781,7 @@ const SymbolAnalysis = ({ symbol, autoRun }) => {
           plan={plan}
           aiPlan={aiPlan}
           record={record}
+          view={view}
           delay={0}
         />
       )}
