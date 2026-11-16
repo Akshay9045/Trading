@@ -24,7 +24,7 @@ export const PROVIDER_INFO = {
 }
 
 // ── Shared prompt ─────────────────────────────────────────────────────────────
-const buildPrompt = (symbol, indicators, formulaSignal, quote, timeframe) => {
+const buildPrompt = (symbol, indicators, formulaSignal, quote, timeframe, plan) => {
   const { rsi, macd, macdSignal, ema9, ema20, ema50, bbUpper, bbLower, atr } = indicators || {}
   const price         = quote?.price         || formulaSignal?.entry || 0
   const changePercent = quote?.changePercent || 0
@@ -47,7 +47,9 @@ ${hasIndicators ? `- RSI(14): ${rsi?.toFixed(2) ?? 'N/A'}
 - ATR(14): ${atr?.toFixed(2) ?? 'N/A'} (average move per candle on this timeframe)
 - Formula signal: ${formulaSignal?.type ?? 'NONE'} (confidence: ${formulaSignal?.confidence ?? 0}%)
 - Formula target: ₹${formulaSignal?.target ?? 'N/A'} | stop: ₹${formulaSignal?.stopLoss ?? 'N/A'}
-- Backtest of this setup: ${formulaSignal?.calibrated ? `${formulaSignal.backtestWinRate}% win rate, ${formulaSignal.expectancy} R/trade over ${formulaSignal.backtestSamples} trades` : 'not available'}` : `- Technical indicators: NOT AVAILABLE (use price action and today's OHLC only)
+- Backtest of these exact levels: ${formulaSignal?.calibrated ? `${formulaSignal.backtestWinRate}% win rate, ${formulaSignal.expectancy} R/trade over ${formulaSignal.backtestSamples} trades` : 'not available'}${plan ? `
+- Time to option expiry: ${(plan.minsLeft / 375).toFixed(1)} trading days | trade held up to ${plan.holdBars} candle(s)
+- Realistic index move in that time (reached ~half the time): ${plan.reachableMove.toFixed(0)} points (implied volatility ${(plan.iv * 100).toFixed(1)}%)` : ''}` : `- Technical indicators: NOT AVAILABLE (use price action and today's OHLC only)
 - Formula signal: NONE`}
 
 Based on the above data, assess the trade and return ONLY this JSON (replace ALL placeholder values with your actual analysis — do NOT copy placeholder text):
@@ -56,8 +58,9 @@ Based on the above data, assess the trade and return ONLY this JSON (replace ALL
 Rules:
 - signal: exactly "BUY" or "SELL" — always pick the more likely side. Never "HOLD"
 - optionType: exactly "CALL" (with BUY) or "PUT" (with SELL). Never "WAIT"
+- Your job is a second opinion on the formula signal: agree only when the data supports its side; otherwise pick the other side
 - confidence: integer between 50 and 92 — YOUR honest probability that this side wins. When the evidence is mixed, still pick a side but give a LOW confidence (50–58) instead of refusing
-- entryZone/targetZone/stopLoss: index price levels near ₹${Math.round(price)}. ${atr ? `targetZone must be between ₹${(0.5 * atr).toFixed(0)} and ₹${(2 * atr).toFixed(0)} away from Price (0.5 to 2 ATR), on the profit side of your signal` : 'Keep them close to Price'}
+- entryZone/targetZone/stopLoss: index price levels near ₹${Math.round(price)}. ${plan ? `targetZone must be no more than ₹${plan.reachableMove.toFixed(0)} away from Price (the realistic move before expiry), on the profit side of your signal` : atr ? `targetZone must be between ₹${(0.5 * atr).toFixed(0)} and ₹${(2 * atr).toFixed(0)} away from Price (0.5 to 2 ATR), on the profit side of your signal` : 'Keep them close to Price'}
 - Base every level only on the data above, such as the EMAs and Bollinger Bands. Always give entryZone, targetZone and stopLoss for the side you picked: target on the profit side, stop on the loss side
 - agreesWithFormula: true or false (boolean)
 - sentiment: exactly "Bullish", "Bearish", or "Neutral"
@@ -105,7 +108,7 @@ const forceDirection = (parsed, formulaSignal, price) => {
 }
 
 // ── Main export ────────────────────────────────────────────────────────────
-export const getClaudeAnalysis = async (symbol, indicators, formulaSignal, quote, timeframe = '1D') => {
+export const getClaudeAnalysis = async (symbol, indicators, formulaSignal, quote, timeframe = '1D', plan = null) => {
   const provider = getActiveProvider() || await loadAIStatus()
   if (!provider) {
     return { error: 'NO_KEY', message: 'No AI API key on the server. Set GROQ_API_KEY (free at console.groq.com) in .env locally, or in Railway variables when deployed.' }
@@ -122,7 +125,7 @@ export const getClaudeAnalysis = async (symbol, indicators, formulaSignal, quote
     }
   }
 
-  const prompt = buildPrompt(symbol, indicators, formulaSignal, quote, timeframe)
+  const prompt = buildPrompt(symbol, indicators, formulaSignal, quote, timeframe, plan)
 
   try {
     const reply = await callServer(prompt)
