@@ -594,7 +594,7 @@ const SymbolAnalysis = ({ symbol, autoRun }) => {
   const legDelta  = leg && engSide ? (engSide === 'CALL' ? leg.callDelta : leg.putDelta) : null
   const expiryISO = chain?.expiry || getNextExpiryISO(symbol)
   const plan = useMemo(() => (baseSignal && engSide ? planTrade({
-    spot, atr: baseSignal.indicators?.atr, premium, delta: legDelta, strike: atm, side: engSide,
+    spot, atr: baseSignal.indicators?.atr || Math.abs(baseSignal.target - baseSignal.entry), premium, delta: legDelta, strike: atm, side: engSide,
     iv: chain?.atmIV ?? quote?.vix, expiryISO, timeframe,
   }) : null), [baseSignal, engSide, spot, premium, legDelta, atm, chain?.atmIV, quote?.vix, expiryISO, timeframe])
 
