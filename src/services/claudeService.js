@@ -1,19 +1,21 @@
 import axios from 'axios'
 
-// ── Which keys are configured ────────────────────────────────────────────────
-const ANTHROPIC_KEY = import.meta.env.VITE_ANTHROPIC_API_KEY || ''
-const GEMINI_KEY    = import.meta.env.VITE_GEMINI_API_KEY    || ''
-const GROQ_KEY      = import.meta.env.VITE_GROQ_API_KEY      || ''
+// ── Which AI provider the server has a key for ───────────────────────────────
+// Keys live on the server (server/ai.js) — never in the browser bundle. The page
+// loads the active provider once with loadAIStatus().
+let activeProvider = null
+let statusPromise = null
 
-// Pick the first available provider
-export const getActiveProvider = () => {
-  if (GROQ_KEY.length      > 10) return 'groq'
-  if (GEMINI_KEY.length    > 10) return 'gemini'
-  if (ANTHROPIC_KEY.length > 10) return 'anthropic'
-  return null
+export const loadAIStatus = () => {
+  statusPromise ||= axios.get('/api/ai/status', { timeout: 8000 })
+    .then(({ data }) => { activeProvider = data?.provider || null; return activeProvider })
+    .catch(() => { statusPromise = null; return null })
+  return statusPromise
 }
 
-export const isAIEnabled = () => !!getActiveProvider()
+export const getActiveProvider = () => activeProvider
+
+export const isAIEnabled = () => !!activeProvider
 
 export const PROVIDER_INFO = {
   gemini:    { name: 'Google Gemini Flash', model: 'gemini-2.0-flash', color: 'text-blue-400',   free: '1,500/day free' },
@@ -62,61 +64,10 @@ Rules:
 - trendStrength: exactly "Strong", "Moderate", or "Weak"`
 }
 
-// ── Gemini ─────────────────────────────────────────────────────────────────
-const callGemini = async (prompt) => {
-  const { data } = await axios.post(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`,
-    {
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0, maxOutputTokens: 600 },
-    },
-    { timeout: 15000 }
-  )
-  return data?.candidates?.[0]?.content?.parts?.[0]?.text || ''
-}
-
-// ── Groq ───────────────────────────────────────────────────────────────────
-const callGroq = async (prompt) => {
-  const { data } = await axios.post(
-    'https://api.groq.com/openai/v1/chat/completions',
-    {
-      model: PROVIDER_INFO.groq.model,
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: 2000,   // reasoning model — its thinking counts against this limit
-      reasoning_effort: 'low',
-      temperature: 0,
-    },
-    {
-      headers: {
-        'Authorization': `Bearer ${GROQ_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      timeout: 15000,
-    }
-  )
-  return data?.choices?.[0]?.message?.content || ''
-}
-
-// ── Anthropic ──────────────────────────────────────────────────────────────
-const callAnthropic = async (prompt) => {
-  const { data } = await axios.post(
-    '/api/claude/v1/messages',
-    {
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 600,
-      messages: [{ role: 'user', content: prompt }],
-    },
-    {
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': ANTHROPIC_KEY,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
-      },
-      timeout: 15000,
-    }
-  )
-  return data?.content?.[0]?.text || ''
+// ── Server relay: the server calls Groq / Gemini / Anthropic with its own key ──
+const callServer = async (prompt) => {
+  const { data } = await axios.post('/api/ai/complete', { prompt }, { timeout: 30000 })
+  return data
 }
 
 // ── Parse raw text response into JSON ─────────────────────────────────────
@@ -155,9 +106,9 @@ const forceDirection = (parsed, formulaSignal, price) => {
 
 // ── Main export ────────────────────────────────────────────────────────────
 export const getClaudeAnalysis = async (symbol, indicators, formulaSignal, quote, timeframe = '1D') => {
-  const provider = getActiveProvider()
+  const provider = getActiveProvider() || await loadAIStatus()
   if (!provider) {
-    return { error: 'NO_KEY', message: 'No AI API key found. Add VITE_GEMINI_API_KEY or VITE_GROQ_API_KEY to .env' }
+    return { error: 'NO_KEY', message: 'No AI API key on the server. Set GROQ_API_KEY (free at console.groq.com) in .env locally, or in Railway variables when deployed.' }
   }
 
   // No candle history → no real indicators. The model would be forced to invent
@@ -174,16 +125,20 @@ export const getClaudeAnalysis = async (symbol, indicators, formulaSignal, quote
   const prompt = buildPrompt(symbol, indicators, formulaSignal, quote, timeframe)
 
   try {
-    let raw = ''
-    if (provider === 'gemini')    raw = await callGemini(prompt)
-    else if (provider === 'groq') raw = await callGroq(prompt)
-    else                          raw = await callAnthropic(prompt)
+    const reply = await callServer(prompt)
+    const raw   = reply.text || ''
 
     const parsed = forceDirection(parseResponse(raw), formulaSignal, quote?.price || formulaSignal?.entry)
-    return { ...parsed, provider, model: PROVIDER_INFO[provider].model, raw }
+    return { ...parsed, provider: reply.provider, model: reply.model, raw }
   } catch (err) {
-    const status  = err.response?.status
+    // The server answers 502 for provider errors and passes the provider's own code;
+    // a bare 401 is this app's own login expiring, not a bad AI key.
     const body    = err.response?.data
+    const message = typeof body?.error === 'string' ? body.error : body?.error?.message
+    if (!body?.providerStatus && err.response?.status === 401) {
+      return { error: 'LOGIN', message: 'Your login expired. Reload the page and sign in again.' }
+    }
+    const status  = body?.providerStatus || err.response?.status
 
     if (status === 401 || status === 403) {
       return { error: 'INVALID_KEY', message: `Invalid ${PROVIDER_INFO[provider]?.name} API key` }
@@ -191,10 +146,10 @@ export const getClaudeAnalysis = async (symbol, indicators, formulaSignal, quote
     if (status === 429) {
       return { error: 'RATE_LIMIT', message: 'Rate limit hit. Wait a moment and try again.' }
     }
-    if (body?.error?.message?.includes('credit balance')) {
+    if (message?.includes('credit balance')) {
       return { error: 'NO_CREDITS', message: 'No Anthropic credits. Add $5 at console.anthropic.com/settings/billing — or use free Gemini/Groq instead.' }
     }
 
-    return { error: 'FAILED', message: body?.error?.message || err.message || 'AI API call failed.' }
+    return { error: 'FAILED', message: message || err.message || 'AI API call failed.' }
   }
 }

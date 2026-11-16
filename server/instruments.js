@@ -6,9 +6,10 @@
 import fs from 'fs'
 import path from 'path'
 import https from 'https'
+import { dataPath } from './paths.js'
 
 const CSV_URL   = 'https://growwapi-assets.groww.in/instruments/instrument.csv'
-const CACHE_DIR = path.resolve(process.cwd(), '.cache')
+const CACHE_DIR = dataPath()
 const CSV_PATH  = path.join(CACHE_DIR, 'groww-instruments.csv')
 const MAX_AGE_MS = 12 * 3600 * 1000
 

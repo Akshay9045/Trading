@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { watchForLogout } from './authApi'
 
 // Client for the server's /api/trade/* routes (server/trading.js). The custom
 // header is required by the server — it rejects requests without it, which keeps
@@ -8,6 +9,7 @@ const http = axios.create({
   timeout: 20000,
   headers: { 'X-Trade-Client': 'nifty-terminal' },
 })
+watchForLogout(http)
 
 // Surface the server's own error message instead of axios' generic one
 const call = (p) => p.then(r => r.data).catch(err => {

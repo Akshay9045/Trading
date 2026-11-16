@@ -1,0 +1,17 @@
+# Frontend on Netlify. /api/* is forwarded to the Railway backend, so the browser
+# only ever talks to this site (same origin: login cookie works, no CORS).
+# Set API_ORIGIN in Netlify → Site configuration → Environment variables to your
+# Railway URL, e.g. https://trading-api-production.up.railway.app
+[build]
+  command = "npm run build && node scripts/netlify-redirects.mjs"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "same-origin"

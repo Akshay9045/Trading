@@ -14,8 +14,9 @@ import { liveBroker } from './liveBroker.js'
 import { paperBroker } from './paperBroker.js'
 import { getOptionLtp, priceSource } from './prices.js'
 import { SUPPORTED_UNDERLYINGS, getExpiries, getContract, getContractBySymbol, getStrikes, ensureInstruments, todayIST } from './instruments.js'
+import { dataPath } from './paths.js'
 
-const BRACKETS_PATH = path.resolve(process.cwd(), '.cache', 'brackets.json')
+const BRACKETS_PATH = dataPath('brackets.json')
 
 const cfg = {
   liveEnabled: false,
@@ -23,6 +24,8 @@ const cfg = {
   maxLossPerTrade: 2000,
   dailyLossLimit: 5000,
   paperCapital: 100000,
+  localOnly: true,
+  allowedOrigins: [],
 }
 
 let mode = 'paper'
@@ -38,6 +41,10 @@ export function configureTrading(env) {
   cfg.dailyLossLimit  = numEnv(env.TRADE_DAILY_LOSS_LIMIT, cfg.dailyLossLimit)
   cfg.paperCapital    = numEnv(env.TRADE_PAPER_CAPITAL, cfg.paperCapital)
   paperBroker.configure({ capital: cfg.paperCapital })
+  // Deployed (APP_PASSWORD set): the login in auth.js protects these routes, so the
+  // localhost-only check is replaced by an optional allow-list of site origins.
+  cfg.localOnly      = !env.APP_PASSWORD
+  cfg.allowedOrigins = String(env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim().replace(/\/$/, '')).filter(Boolean)
   mode = 'paper'
 }
 
@@ -288,16 +295,24 @@ async function book() {
 }
 
 // ── HTTP layer ─────────────────────────────────────────────────────────────
-// These endpoints move money, so only this app's own pages may call them:
+// These endpoints move money, so only this app's own pages may call them.
+// Local (no APP_PASSWORD):
 //  - Host must be localhost (blocks DNS-rebinding)
 //  - Origin, when sent, must be localhost (blocks other websites' fetch/form posts)
-//  - A custom header is required, which forces a CORS preflight cross-origin
+// Deployed (APP_PASSWORD): api.js requires the login cookie first; Origin, when
+// sent, must be in ALLOWED_ORIGINS (if set).
+// Always: a custom header is required, which forces a CORS preflight cross-origin,
+// and cross-site requests (Sec-Fetch-Site) are refused.
 const LOCAL_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/
 function allowed(req) {
-  if (!LOCAL_HOST.test(req.headers.host || '')) return false
   const origin = req.headers.origin
-  if (origin) {
-    try { if (!LOCAL_HOST.test(new URL(origin).host)) return false } catch { return false }
+  if (cfg.localOnly) {
+    if (!LOCAL_HOST.test(req.headers.host || '')) return false
+    if (origin) {
+      try { if (!LOCAL_HOST.test(new URL(origin).host)) return false } catch { return false }
+    }
+  } else if (origin && cfg.allowedOrigins.length && !cfg.allowedOrigins.includes(origin.replace(/\/$/, ''))) {
+    return false
   }
   const site = req.headers['sec-fetch-site']
   if (site && site !== 'same-origin' && site !== 'none') return false
