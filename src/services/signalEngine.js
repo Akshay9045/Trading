@@ -186,6 +186,7 @@ export const generateSignal = (candles, opts = {}) => {
       ema50: ema50 ? parseFloat(ema50.toFixed(2)) : null,
       bbUpper: bbUpper ? parseFloat(bbUpper.toFixed(2)) : null,
       bbLower: bbLower ? parseFloat(bbLower.toFixed(2)) : null,
+      atr: parseFloat(atrValue.toFixed(2)),
     },
     timestamp: new Date().toISOString(),
   }

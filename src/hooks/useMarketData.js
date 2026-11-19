@@ -14,10 +14,11 @@ const MIN_BUCKET_SAMPLES = 8
 // `signalOpts` MUST match the options used to generate `signal`, so the backtest
 // takes trades in the same way (e.g. always-trade / no trend filter). Otherwise the
 // live signal's direction may have zero backtested trades → a blank "n=0" display.
-export const calibrateSignal = (signal, candles, signalOpts = {}) => {
+// btOpts: extra runBacktest options (e.g. horizon = bars a trade may be held)
+export const calibrateSignal = (signal, candles, signalOpts = {}, btOpts = {}) => {
   if (!signal || signal.type === 'HOLD' || !candles || candles.length < 90) return signal
   let bt
-  try { bt = runBacktest(candles, { signalOpts }) } catch { return signal }
+  try { bt = runBacktest(candles, { ...btOpts, signalOpts }) } catch { return signal }
   if (!bt) return signal
 
   // Use THIS direction's own backtested trades — consistent numbers, no all-directions
